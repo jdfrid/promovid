@@ -1,6 +1,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
@@ -47,7 +48,9 @@ await app.register(projectRoutes, { prefix: "/api" });
 await app.register(assetRoutes, { prefix: "/api" });
 await app.register(providerRoutes, { prefix: "/api" });
 
-const webDistPath = path.resolve("./apps/web/dist");
+const currentFilePath = fileURLToPath(import.meta.url);
+const currentDirectory = path.dirname(currentFilePath);
+const webDistPath = path.resolve(currentDirectory, "../../web/dist");
 const webIndexPath = path.join(webDistPath, "index.html");
 const webAssetsPath = path.join(webDistPath, "assets");
 
