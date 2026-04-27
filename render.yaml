@@ -57,4 +57,5 @@ services:
 
 databases:
   - name: promovid-postgres
-    plan: starter
+    plan: basic-256mb
+    diskSizeGB: 15
