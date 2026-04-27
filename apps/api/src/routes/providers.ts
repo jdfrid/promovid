@@ -15,6 +15,10 @@ const providerSchema = z.object({
   config: z.record(z.string(), z.unknown()).default({})
 });
 
+const updateProviderSchema = providerSchema.partial().extend({
+  apiKey: z.string().optional()
+});
+
 export async function providerRoutes(app: FastifyInstance) {
   app.get("/providers", async () => {
     const tenant = await getDemoTenant();
@@ -48,6 +52,35 @@ export async function providerRoutes(app: FastifyInstance) {
     });
 
     reply.code(201);
+    return { data: { ...provider, encryptedKey: undefined, hasSecret: Boolean(provider.encryptedKey) } };
+  });
+
+  app.patch("/providers/:providerId", async (request) => {
+    const params = z.object({ providerId: z.string() }).parse(request.params);
+    const input = updateProviderSchema.parse(request.body);
+    const tenant = await getDemoTenant();
+    const existing = await prisma.providerCredential.findFirstOrThrow({
+      where: {
+        id: params.providerId,
+        tenantId: tenant.id
+      }
+    });
+
+    const provider = await prisma.providerCredential.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        type: input.type,
+        provider: input.provider,
+        displayName: input.displayName,
+        encryptedKey: input.apiKey ? encryptSecret(input.apiKey) : undefined,
+        priority: input.priority,
+        enabled: input.enabled,
+        config: input.config ? (input.config as Prisma.InputJsonValue) : undefined
+      }
+    });
+
     return { data: { ...provider, encryptedKey: undefined, hasSecret: Boolean(provider.encryptedKey) } };
   });
 }

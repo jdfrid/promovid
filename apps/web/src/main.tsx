@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { apiGet, apiPost, absoluteAssetUrl } from "./api";
+import { apiGet, apiPatch, apiPost, absoluteAssetUrl } from "./api";
 import type { Asset, Project, Provider, RenderJob } from "./types";
 import "./styles.css";
 
@@ -243,7 +243,17 @@ function Assets() {
 
 function Settings() {
   const [providers, setProviders] = useState<Provider[]>([]);
-
+  const [selectedId, setSelectedId] = useState<string>("new");
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    type: "SCRIPT",
+    provider: "openai",
+    displayName: "OpenAI Script Writer",
+    apiKey: "",
+    priority: 1,
+    enabled: true
+  });
   useEffect(() => {
     void apiGet<Provider[]>("/providers").then(setProviders);
   }, []);
@@ -255,11 +265,140 @@ function Settings() {
     }, {});
   }, [providers]);
 
+  function refreshProviders() {
+    return apiGet<Provider[]>("/providers").then(setProviders);
+  }
+
+  function selectProvider(providerId: string) {
+    setSelectedId(providerId);
+    setMessage("");
+
+    if (providerId === "new") {
+      setForm({
+        type: "SCRIPT",
+        provider: "openai",
+        displayName: "OpenAI Script Writer",
+        apiKey: "",
+        priority: 1,
+        enabled: true
+      });
+      return;
+    }
+
+    const provider = providers.find((item) => item.id === providerId);
+    if (provider) {
+      setForm({
+        type: provider.type,
+        provider: provider.provider,
+        displayName: provider.displayName,
+        apiKey: "",
+        priority: provider.priority,
+        enabled: provider.enabled
+      });
+    }
+  }
+
+  async function saveProvider() {
+    setSaving(true);
+    setMessage("");
+    try {
+      const payload = {
+        ...form,
+        priority: Number(form.priority),
+        apiKey: form.apiKey.trim() || undefined
+      };
+
+      if (selectedId === "new") {
+        await apiPost<Provider>("/providers", payload);
+      } else {
+        await apiPatch<Provider>(`/providers/${selectedId}`, payload);
+      }
+
+      await refreshProviders();
+      setForm((current) => ({ ...current, apiKey: "" }));
+      setMessage("ההגדרות נשמרו. המפתח מוצפן ולא יוצג שוב במסך.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "שמירה נכשלה");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section>
       <div className="page-title">
         <p className="eyebrow">Providers</p>
         <h2>הגדרות ספקים</h2>
+      </div>
+      <div className="two-col">
+        <div className="panel">
+          <h3>הגדרת API Key</h3>
+          <label>בחירת ספק
+            <select value={selectedId} onChange={(event) => selectProvider(event.target.value)}>
+              <option value="new">ספק חדש</option>
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.displayName} ({provider.type})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>סוג ספק
+            <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
+              <option value="SCRIPT">תסריט</option>
+              <option value="MEDIA">מדיה</option>
+              <option value="VOICE">קול</option>
+              <option value="MUSIC">מוסיקה</option>
+              <option value="AVATAR">אווטר</option>
+              <option value="VIDEO">יצירת וידאו</option>
+              <option value="MERGE">מיזוג</option>
+              <option value="STORAGE">אחסון</option>
+              <option value="DISTRIBUTION">הפצה</option>
+            </select>
+          </label>
+          <label>מזהה ספק
+            <input value={form.provider} placeholder="openai / pexels / elevenlabs" onChange={(event) => setForm({ ...form, provider: event.target.value })} />
+          </label>
+          <label>שם לתצוגה
+            <input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} />
+          </label>
+          <label>API Key
+            <input type="password" value={form.apiKey} placeholder="הדבק כאן מפתח חדש. להשאיר ריק כדי לא לשנות." onChange={(event) => setForm({ ...form, apiKey: event.target.value })} />
+          </label>
+          <div className="row compact-row">
+            <label>עדיפות
+              <input type="number" min="1" value={form.priority} onChange={(event) => setForm({ ...form, priority: Number(event.target.value) })} />
+            </label>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
+              פעיל
+            </label>
+          </div>
+          <button className="primary" disabled={saving || !form.provider || !form.displayName} onClick={saveProvider}>
+            {saving ? "שומר..." : "שמירת הגדרות"}
+          </button>
+          {message && <p className="notice">{message}</p>}
+        </div>
+        <div className="panel">
+          <h3>ספקים מומלצים להתחלה</h3>
+          <div className="quick-presets">
+            {[
+              ["SCRIPT", "openai", "OpenAI Script Writer"],
+              ["MEDIA", "pexels", "Pexels Media Search"],
+              ["VOICE", "elevenlabs", "ElevenLabs Voiceover"],
+              ["MERGE", "ffmpeg", "Self-hosted FFmpeg"],
+              ["STORAGE", "local", "Local Storage"]
+            ].map(([type, provider, displayName]) => (
+              <button key={`${type}-${provider}`} onClick={() => {
+                setSelectedId("new");
+                setForm({ type, provider, displayName, apiKey: "", priority: 1, enabled: true });
+              }}>
+                {displayName}
+              </button>
+            ))}
+          </div>
+          <p className="muted">המפתחות נשמרים מוצפנים בצד השרת. לאחר שמירה לא ניתן לראות את הערך המקורי, רק להחליף אותו.</p>
+        </div>
       </div>
       <div className="provider-grid">
         {Object.entries(grouped).map(([type, items]) => (
@@ -268,8 +407,9 @@ function Settings() {
             {items?.map((provider) => (
               <div className="provider" key={provider.id}>
                 <strong>{provider.displayName}</strong>
-                <span>{provider.provider} · priority {provider.priority}</span>
+                <span>{provider.provider} · priority {provider.priority} · key {provider.hasSecret ? "saved" : "missing"}</span>
                 <Badge value={provider.enabled ? "enabled" : "disabled"} />
+                <button className="secondary" onClick={() => selectProvider(provider.id)}>עריכה</button>
               </div>
             ))}
           </article>

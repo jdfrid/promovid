@@ -57,7 +57,8 @@ nav {
 }
 
 nav button,
-.primary {
+.primary,
+.secondary {
   border: 0;
   border-radius: 14px;
   padding: 12px 16px;
@@ -74,6 +75,11 @@ nav button.active,
 .primary {
   background: linear-gradient(135deg, #6d5dfc, #18c2ff);
   color: #fff;
+}
+
+.secondary {
+  background: #252b45;
+  color: #dfe2ff;
 }
 
 main {
@@ -215,6 +221,44 @@ textarea {
   grid-template-columns: 1fr 1fr auto;
   gap: 12px;
   align-items: end;
+}
+
+.compact-row {
+  grid-template-columns: 1fr auto;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+}
+
+.checkbox-label input {
+  width: auto;
+}
+
+.quick-presets {
+  display: grid;
+  gap: 10px;
+}
+
+.quick-presets button {
+  border: 1px solid #323957;
+  border-radius: 14px;
+  background: #111421;
+  color: #dfe2ff;
+  padding: 12px 14px;
+  text-align: right;
+  cursor: pointer;
+}
+
+.notice {
+  border: 1px solid rgba(122, 240, 191, 0.35);
+  border-radius: 14px;
+  background: rgba(64, 212, 151, 0.12);
+  color: #7af0bf;
+  padding: 12px 14px;
 }
 
 .scene {

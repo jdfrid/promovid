@@ -22,6 +22,19 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return envelope.data;
 }
 
+export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${apiUrl}/api${path}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {})
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const envelope = (await response.json()) as { data: T };
+  return envelope.data;
+}
+
 export function absoluteAssetUrl(url?: string | null) {
   if (!url) {
     return "";
