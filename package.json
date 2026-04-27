@@ -1,0 +1,30 @@
+{
+  "name": "promovid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AdBot MVP - SaaS platform for creating short promotional videos.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:api dev:web dev:worker",
+    "dev:api": "npm --workspace @promovid/api run dev",
+    "dev:web": "npm --workspace @promovid/web run dev",
+    "dev:worker": "npm --workspace @promovid/api run dev:worker",
+    "build": "npm --workspace @promovid/shared run build && npm --workspace @promovid/api run build && npm --workspace @promovid/web run build",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm --workspace @promovid/shared run typecheck && npm --workspace @promovid/shared run build && npm --workspace @promovid/api run typecheck && npm --workspace @promovid/web run typecheck",
+    "db:generate": "npm --workspace @promovid/api run db:generate",
+    "db:migrate": "npm --workspace @promovid/api run db:migrate",
+    "db:seed": "npm --workspace @promovid/api run db:seed"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
