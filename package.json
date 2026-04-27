@@ -18,6 +18,7 @@
     "typecheck": "npm --workspace @promovid/shared run typecheck && npm --workspace @promovid/shared run build && npm --workspace @promovid/api run typecheck && npm --workspace @promovid/web run typecheck",
     "db:generate": "npm --workspace @promovid/api run db:generate",
     "db:migrate": "npm --workspace @promovid/api run db:migrate",
+    "db:deploy": "npm --workspace @promovid/api run db:deploy",
     "db:seed": "npm --workspace @promovid/api run db:seed"
   },
   "devDependencies": {

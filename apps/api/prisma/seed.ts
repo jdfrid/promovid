@@ -35,16 +35,26 @@ async function main() {
   ];
 
   for (const [type, provider, displayName] of providers) {
-    await prisma.providerCredential.create({
-      data: {
+    const existing = await prisma.providerCredential.findFirst({
+      where: {
         tenantId: tenant.id,
         type,
-        provider,
-        displayName,
-        enabled: provider === "ffmpeg" || provider === "local",
-        priority: 1
+        provider
       }
     });
+
+    if (!existing) {
+      await prisma.providerCredential.create({
+        data: {
+          tenantId: tenant.id,
+          type,
+          provider,
+          displayName,
+          enabled: provider === "ffmpeg" || provider === "local",
+          priority: 1
+        }
+      });
+    }
   }
 }
 

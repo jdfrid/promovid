@@ -3,6 +3,7 @@ services:
     name: promovid
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
+    preDeployCommand: npm --workspace @promovid/api run db:deploy && npm --workspace @promovid/api run db:seed
     plan: starter
     healthCheckPath: /health
     envVars:
