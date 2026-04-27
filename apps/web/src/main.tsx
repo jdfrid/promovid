@@ -146,7 +146,13 @@ function CreateVideo() {
       <div className="two-col">
         <div className="panel">
           <label>כותרת הסרטון<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
-          <label>פריט מידע<textarea value={form.sourceText} onChange={(event) => setForm({ ...form, sourceText: event.target.value })} /></label>
+          <label>פריט מידע, קישור והוראות
+            <textarea
+              value={form.sourceText}
+              placeholder={"אפשר להדביק URL והוראות, לדוגמה:\nhttps://example.com/product\nתכין סרטון פרסומת למוצר הזה"}
+              onChange={(event) => setForm({ ...form, sourceText: event.target.value })}
+            />
+          </label>
           <label>מצב יצירה<select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
             <option value="manual">ידני</option>
             <option value="automatic">אוטומטי</option>

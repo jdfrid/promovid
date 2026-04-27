@@ -16,21 +16,30 @@ interface ScriptProviderSettings {
   config?: unknown;
 }
 
+interface SourceContext {
+  rawInput: string;
+  url?: string;
+  instructions: string;
+  pageText?: string;
+  fetchError?: string;
+}
+
 export async function generateScript(request: ScriptRequest): Promise<SceneInput[]> {
+  const sourceContext = await buildSourceContext(request.sourceText);
   if (request.provider) {
     if (!request.provider.apiKey) {
       throw new Error(`Script provider ${request.provider.provider} is enabled but has no API key.`);
     }
 
     if (request.provider.provider.toLowerCase().includes("gemini")) {
-      return generateGeminiScript(request, request.provider);
+      return generateGeminiScript(request, request.provider, sourceContext);
     }
 
     throw new Error(`Script provider ${request.provider.provider} is not implemented yet.`);
   }
 
   const sceneCount = Math.max(2, Math.ceil(request.duration / 8));
-  const cleanSource = request.sourceText.trim();
+  const cleanSource = sourceContext.pageText || sourceContext.instructions || sourceContext.rawInput;
   const style = request.style || "modern, clear, conversion-oriented";
   const audience = request.targetAudience || "general audience";
 
@@ -54,9 +63,13 @@ function buildNarration(source: string, index: number, total: number, style: str
   return `${source} helps turn interest into action with a concise benefit-driven story.`;
 }
 
-async function generateGeminiScript(request: ScriptRequest, provider: ScriptProviderSettings): Promise<SceneInput[]> {
+async function generateGeminiScript(
+  request: ScriptRequest,
+  provider: ScriptProviderSettings,
+  sourceContext: SourceContext
+): Promise<SceneInput[]> {
   const model = readConfigValue(provider.config, "model") ?? "gemini-2.0-flash";
-  const prompt = buildGeminiPrompt(request);
+  const prompt = buildGeminiPrompt(request, sourceContext);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(provider.apiKey ?? "")}`,
     {
@@ -88,7 +101,7 @@ async function generateGeminiScript(request: ScriptRequest, provider: ScriptProv
   return normalizeScenes(parseSceneResponse(text), request.duration);
 }
 
-function buildGeminiPrompt(request: ScriptRequest) {
+function buildGeminiPrompt(request: ScriptRequest, sourceContext: SourceContext) {
   const sceneCount = Math.max(2, Math.ceil(request.duration / 8));
   return `
 אתה מחולל תסריטי פרסומת מקצועי לווידאו קצר.
@@ -106,8 +119,19 @@ function buildGeminiPrompt(request: ScriptRequest) {
 - סגנון: ${request.style || "חד, מודרני, מכירתי"}
 - קהל יעד: ${request.targetAudience || "לקוחות חדשים"}
 
-פריט מידע גולמי:
-${request.sourceText}
+מקור המידע:
+${sourceContext.url ? `- URL: ${sourceContext.url}` : "- URL: לא סופק"}
+
+הוראות המשתמש לבניית התסריט והסרטון:
+${sourceContext.instructions || "לא סופקו הוראות נוספות מעבר לפריט המידע."}
+
+תוכן שחולץ מעמוד האינטרנט:
+${sourceContext.pageText || sourceContext.fetchError || "לא סופק או לא ניתן היה לחלץ תוכן מהעמוד."}
+
+קלט גולמי מלא:
+${sourceContext.rawInput}
+
+אם תוכן העמוד חסום, דל, או מכיל הודעת בדיקת דפדפן, השתמש בהוראות המשתמש וב־URL כהקשר, אבל אל תמציא פרטים ספציפיים שלא הופיעו במקור.
 
 החזר JSON בלבד, בלי Markdown ובלי הסברים, במבנה הבא:
 {
@@ -127,6 +151,72 @@ ${request.sourceText}
 - אין להשתמש במשפטים כלליים כמו "Meet..." אם אינם מתאימים לשפה ולמוצר.
 - אם הקלט בעברית, כתוב את הקריינות בעברית.
 `.trim();
+}
+
+async function buildSourceContext(rawInput: string): Promise<SourceContext> {
+  const url = extractFirstUrl(rawInput);
+  const instructions = url ? rawInput.replace(url, "").trim() : rawInput.trim();
+
+  if (!url) {
+    return { rawInput, instructions };
+  }
+
+  try {
+    const pageText = await fetchPageText(url);
+    return { rawInput, url, instructions, pageText };
+  } catch (error) {
+    return {
+      rawInput,
+      url,
+      instructions,
+      fetchError: `לא ניתן היה לקרוא את תוכן העמוד: ${error instanceof Error ? error.message : "unknown error"}`
+    };
+  }
+}
+
+function extractFirstUrl(value: string) {
+  const match = value.match(/https?:\/\/[^\s<>"']+/i);
+  return match?.[0]?.replace(/[),.]+$/g, "");
+}
+
+async function fetchPageText(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; AdBot/0.1; +https://promovid.onrender.com)"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/html") && !contentType.includes("text/plain")) {
+      throw new Error(`unsupported content-type ${contentType || "unknown"}`);
+    }
+
+    return htmlToText(await response.text()).slice(0, 12000);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function htmlToText(html: string) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function parseSceneResponse(text: string): SceneInput[] {
