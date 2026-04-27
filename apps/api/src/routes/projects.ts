@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { renderQueue } from "../queue.js";
 import { generateScript } from "../providers/scriptProvider.js";
+import { decryptSecret } from "../crypto.js";
 
 const tenantSlug = "demo";
 
@@ -30,7 +31,24 @@ export async function projectRoutes(app: FastifyInstance) {
   app.post("/projects", async (request, reply) => {
     const input = createProjectSchema.parse(request.body);
     const tenant = await getDemoTenant();
-    const scenes = await generateScript(input);
+    const scriptProvider = await prisma.providerCredential.findFirst({
+      where: {
+        tenantId: tenant.id,
+        type: "SCRIPT",
+        enabled: true
+      },
+      orderBy: { priority: "asc" }
+    });
+    const scenes = await generateScript({
+      ...input,
+      provider: scriptProvider
+        ? {
+            provider: scriptProvider.provider,
+            apiKey: scriptProvider.encryptedKey ? decryptSecret(scriptProvider.encryptedKey) : undefined,
+            config: scriptProvider.config
+          }
+        : null
+    });
 
     const project = await prisma.project.create({
       data: {
@@ -90,7 +108,13 @@ export async function projectRoutes(app: FastifyInstance) {
 }
 
 async function getDemoTenant() {
-  return prisma.tenant.findUniqueOrThrow({
-    where: { slug: tenantSlug }
+  return prisma.tenant.upsert({
+    where: { slug: tenantSlug },
+    update: {},
+    create: {
+      slug: tenantSlug,
+      name: "Demo Studio",
+      brandColor: "#6d5dfc"
+    }
   });
 }
