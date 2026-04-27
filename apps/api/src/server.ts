@@ -1,4 +1,6 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
@@ -44,6 +46,31 @@ await app.register(dashboardRoutes, { prefix: "/api" });
 await app.register(projectRoutes, { prefix: "/api" });
 await app.register(assetRoutes, { prefix: "/api" });
 await app.register(providerRoutes, { prefix: "/api" });
+
+const webDistPath = path.resolve("./apps/web/dist");
+const webIndexPath = path.join(webDistPath, "index.html");
+
+if (existsSync(webIndexPath)) {
+  await app.register(fastifyStatic, {
+    root: path.join(webDistPath, "assets"),
+    prefix: "/assets/",
+    decorateReply: false
+  });
+
+  app.get("/", async (_request, reply) => {
+    reply.type("text/html").send(await readFile(webIndexPath, "utf8"));
+  });
+
+  app.get("/*", async (request, reply) => {
+    const reservedPrefixes = ["/api", "/files", "/renders", "/assets"];
+    if (reservedPrefixes.some((prefix) => request.url.startsWith(prefix))) {
+      reply.code(404).send({ error: "Not found" });
+      return;
+    }
+
+    reply.type("text/html").send(await readFile(webIndexPath, "utf8"));
+  });
+}
 
 app.setErrorHandler((error: Error, _request, reply) => {
   app.log.error(error);

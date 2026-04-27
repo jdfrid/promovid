@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: promovid-api
-    env: docker
+    name: promovid
+    runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     plan: starter
     healthCheckPath: /health
@@ -26,74 +26,6 @@ services:
 
   - type: worker
     name: promovid-worker
-    env: docker
-    dockerfilePath: ./apps/api/Dockerfile
-    plan: starter
-    dockerCommand: npm --workspace @promovid/api run start:worker
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: promovid-postgres
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: promovid-redis
-          property: connectionString
-      - key: JWT_SECRET
-        sync: false
-      - key: ENCRYPTION_KEY
-        sync: false
-
-  - type: web
-    name: promovid-web
-    env: docker
-    dockerfilePath: ./apps/web/Dockerfile
-    plan: starter
-    envVars:
-      - key: VITE_API_URL
-        fromService:
-          type: web
-          name: promovid-api
-          property: host
-
-  - type: redis
-    name: promovid-redis
-    plan: starter
-    maxmemoryPolicy: allkeys-lru
-
-databases:
-  - name: promovid-postgres
-    plan: starter
-services:
-  - type: web
-    name: promovid-api
-    runtime: docker
-    dockerfilePath: ./apps/api/Dockerfile
-    plan: starter
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: promovid-postgres
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: promovid-redis
-          property: connectionString
-      - key: JWT_SECRET
-        generateValue: true
-      - key: ENCRYPTION_KEY
-        generateValue: true
-      - key: LOCAL_STORAGE_PATH
-        value: /app/uploads
-
-  - type: worker
-    name: promovid-worker
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     dockerCommand: npm --workspace @promovid/api run start:worker
@@ -116,18 +48,6 @@ services:
         sync: false
       - key: LOCAL_STORAGE_PATH
         value: /app/uploads
-
-  - type: web
-    name: promovid-web
-    runtime: docker
-    dockerfilePath: ./apps/web/Dockerfile
-    plan: starter
-    envVars:
-      - key: VITE_API_URL
-        fromService:
-          type: web
-          name: promovid-api
-          property: host
 
   - type: redis
     name: promovid-redis
