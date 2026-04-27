@@ -241,8 +241,21 @@ function Assets() {
   );
 }
 
+const providerServiceTypes = [
+  { type: "SCRIPT", label: "תסריט", description: "מודלי AI לכתיבת תסריטים וחלוקה לסצנות.", presets: [["openai", "OpenAI Script Writer"], ["gemini", "Gemini Script Writer"], ["anthropic", "Claude Script Writer"]] },
+  { type: "MEDIA", label: "מדיה", description: "חיפוש ושליפת תמונות ווידאו ממאגרים.", presets: [["pexels", "Pexels Media Search"], ["shutterstock", "Shutterstock"], ["unsplash", "Unsplash"]] },
+  { type: "VOICE", label: "קול", description: "TTS וקריינות לסרטונים.", presets: [["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
+  { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע וספריות סאונד.", presets: [["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
+  { type: "AVATAR", label: "אווטרים", description: "יצירת דמויות/דוברים וירטואליים.", presets: [["heygen", "HeyGen"], ["did", "D-ID"], ["synthesia", "Synthesia"]] },
+  { type: "VIDEO", label: "יצירת וידאו", description: "מחוללי וידאו AI ליצירת קליפים לכל סצנה.", presets: [["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
+  { type: "MERGE", label: "מיזוג", description: "חיבור סצנות, כתוביות, watermark ו־transitions.", presets: [["ffmpeg", "Self-hosted FFmpeg"], ["shotstack", "Shotstack"], ["creatomate", "Creatomate"]] },
+  { type: "STORAGE", label: "אחסון", description: "שמירת קבצים ותוצרים סופיים.", presets: [["local", "Local Storage"], ["cloudflare-r2", "Cloudflare R2"], ["s3", "AWS S3"], ["cloudinary", "Cloudinary"]] },
+  { type: "DISTRIBUTION", label: "הפצה", description: "פרסום לרשתות, webhooks וערוצי יציאה.", presets: [["youtube", "YouTube"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["linkedin", "LinkedIn"]] }
+] as const;
+
 function Settings() {
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [activeType, setActiveType] = useState("SCRIPT");
   const [selectedId, setSelectedId] = useState<string>("new");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -258,12 +271,8 @@ function Settings() {
     void apiGet<Provider[]>("/providers").then(setProviders);
   }, []);
 
-  const grouped = useMemo(() => {
-    return providers.reduce<Record<string, Provider[]>>((acc, provider) => {
-      acc[provider.type] = [...(acc[provider.type] ?? []), provider];
-      return acc;
-    }, {});
-  }, [providers]);
+  const activeService = providerServiceTypes.find((service) => service.type === activeType) ?? providerServiceTypes[0];
+  const activeProviders = useMemo(() => providers.filter((provider) => provider.type === activeType), [activeType, providers]);
 
   function refreshProviders() {
     return apiGet<Provider[]>("/providers").then(setProviders);
@@ -275,9 +284,9 @@ function Settings() {
 
     if (providerId === "new") {
       setForm({
-        type: "SCRIPT",
-        provider: "openai",
-        displayName: "OpenAI Script Writer",
+        type: activeType,
+        provider: activeService.presets[0]?.[0] ?? "",
+        displayName: activeService.presets[0]?.[1] ?? "",
         apiKey: "",
         priority: 1,
         enabled: true
@@ -287,6 +296,7 @@ function Settings() {
 
     const provider = providers.find((item) => item.id === providerId);
     if (provider) {
+      setActiveType(provider.type);
       setForm({
         type: provider.type,
         provider: provider.provider,
@@ -304,6 +314,7 @@ function Settings() {
     try {
       const payload = {
         ...form,
+        type: activeType,
         priority: Number(form.priority),
         apiKey: form.apiKey.trim() || undefined
       };
@@ -330,32 +341,51 @@ function Settings() {
         <p className="eyebrow">Providers</p>
         <h2>הגדרות ספקים</h2>
       </div>
+      <div className="service-tabs">
+        {providerServiceTypes.map((service) => (
+          <button
+            className={activeType === service.type ? "active" : ""}
+            key={service.type}
+            onClick={() => {
+              setActiveType(service.type);
+              setSelectedId("new");
+              setMessage("");
+              setForm({
+                type: service.type,
+                provider: service.presets[0]?.[0] ?? "",
+                displayName: service.presets[0]?.[1] ?? "",
+                apiKey: "",
+                priority: 1,
+                enabled: true
+              });
+            }}
+          >
+            {service.label}
+          </button>
+        ))}
+      </div>
+      <div className="service-heading panel">
+        <div>
+          <p className="eyebrow">{activeService.type}</p>
+          <h3>{activeService.label}</h3>
+          <p className="muted">{activeService.description}</p>
+        </div>
+        <Badge value={`${activeProviders.length} providers`} />
+      </div>
       <div className="two-col">
         <div className="panel">
-          <h3>הגדרת API Key</h3>
+          <h3>הגדרת ספק עבור {activeService.label}</h3>
           <label>בחירת ספק
             <select value={selectedId} onChange={(event) => selectProvider(event.target.value)}>
               <option value="new">ספק חדש</option>
-              {providers.map((provider) => (
+              {activeProviders.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.displayName} ({provider.type})
                 </option>
               ))}
             </select>
           </label>
-          <label>סוג ספק
-            <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
-              <option value="SCRIPT">תסריט</option>
-              <option value="MEDIA">מדיה</option>
-              <option value="VOICE">קול</option>
-              <option value="MUSIC">מוסיקה</option>
-              <option value="AVATAR">אווטר</option>
-              <option value="VIDEO">יצירת וידאו</option>
-              <option value="MERGE">מיזוג</option>
-              <option value="STORAGE">אחסון</option>
-              <option value="DISTRIBUTION">הפצה</option>
-            </select>
-          </label>
+          <div className="readonly-service">סוג שירות: {activeService.label}</div>
           <label>מזהה ספק
             <input value={form.provider} placeholder="openai / pexels / elevenlabs" onChange={(event) => setForm({ ...form, provider: event.target.value })} />
           </label>
@@ -380,18 +410,12 @@ function Settings() {
           {message && <p className="notice">{message}</p>}
         </div>
         <div className="panel">
-          <h3>ספקים מומלצים להתחלה</h3>
+          <h3>ספקים מומלצים עבור {activeService.label}</h3>
           <div className="quick-presets">
-            {[
-              ["SCRIPT", "openai", "OpenAI Script Writer"],
-              ["MEDIA", "pexels", "Pexels Media Search"],
-              ["VOICE", "elevenlabs", "ElevenLabs Voiceover"],
-              ["MERGE", "ffmpeg", "Self-hosted FFmpeg"],
-              ["STORAGE", "local", "Local Storage"]
-            ].map(([type, provider, displayName]) => (
-              <button key={`${type}-${provider}`} onClick={() => {
+            {activeService.presets.map(([provider, displayName]) => (
+              <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type, provider, displayName, apiKey: "", priority: 1, enabled: true });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true });
               }}>
                 {displayName}
               </button>
@@ -401,10 +425,10 @@ function Settings() {
         </div>
       </div>
       <div className="provider-grid">
-        {Object.entries(grouped).map(([type, items]) => (
-          <article className="panel" key={type}>
-            <h3>{type}</h3>
-            {items?.map((provider) => (
+          <article className="panel">
+            <h3>ספקים מוגדרים עבור {activeService.label}</h3>
+            {activeProviders.length === 0 && <p className="muted">עדיין לא הוגדרו ספקים לסוג השירות הזה.</p>}
+            {activeProviders.map((provider) => (
               <div className="provider" key={provider.id}>
                 <strong>{provider.displayName}</strong>
                 <span>{provider.provider} · priority {provider.priority} · key {provider.hasSecret ? "saved" : "missing"}</span>
@@ -413,7 +437,6 @@ function Settings() {
               </div>
             ))}
           </article>
-        ))}
       </div>
     </section>
   );

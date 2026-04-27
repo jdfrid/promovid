@@ -86,7 +86,13 @@ export async function providerRoutes(app: FastifyInstance) {
 }
 
 async function getDemoTenant() {
-  return prisma.tenant.findUniqueOrThrow({
-    where: { slug: "demo" }
+  return prisma.tenant.upsert({
+    where: { slug: "demo" },
+    update: {},
+    create: {
+      slug: "demo",
+      name: "Demo Studio",
+      brandColor: "#6d5dfc"
+    }
   });
 }

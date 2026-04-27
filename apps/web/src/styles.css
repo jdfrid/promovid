@@ -180,10 +180,36 @@ td {
   margin-bottom: 20px;
 }
 
-.steps span {
+.steps span,
+.service-tabs button {
   background: #20243a;
   border-radius: 999px;
   padding: 8px 14px;
+}
+
+.service-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.service-tabs button {
+  border: 1px solid #323957;
+  color: #dfe2ff;
+  cursor: pointer;
+}
+
+.service-tabs button.active {
+  background: linear-gradient(135deg, #6d5dfc, #18c2ff);
+  color: #fff;
+}
+
+.service-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
 }
 
 .two-col {
@@ -208,6 +234,15 @@ textarea {
   background: #111421;
   color: #fff;
   padding: 12px 14px;
+}
+
+.readonly-service {
+  border: 1px solid #323957;
+  border-radius: 14px;
+  background: rgba(109, 93, 252, 0.12);
+  color: #dfe2ff;
+  padding: 12px 14px;
+  margin-bottom: 14px;
 }
 
 textarea {
