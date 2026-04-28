@@ -179,23 +179,6 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: renderJob };
   });
 
-  app.get("/projects/:projectId/logs", async (request) => {
-    const params = z.object({ projectId: z.string() }).parse(request.params);
-    const tenant = await getDemoTenant();
-    const logs = await prisma.auditLog.findMany({
-      where: {
-        tenantId: tenant.id,
-        OR: [
-          { entity: "Project", entityId: params.projectId },
-          { entity: "RenderJob", metadata: { path: ["projectId"], equals: params.projectId } }
-        ]
-      },
-      orderBy: { createdAt: "desc" },
-      take: 100
-    });
-
-    return { data: logs };
-  });
 }
 
 async function generateScriptWithFailover(
