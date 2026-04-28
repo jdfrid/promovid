@@ -1,11 +1,11 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import fastifyStatic from "@fastify/static";
+import type { FastifyReply } from "fastify";
 import { config } from "./config.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { projectRoutes } from "./routes/projects.js";
@@ -26,18 +26,6 @@ await app.register(multipart, {
   }
 });
 
-await app.register(fastifyStatic, {
-  root: path.resolve(config.LOCAL_STORAGE_PATH),
-  prefix: "/files/",
-  decorateReply: false
-});
-
-await app.register(fastifyStatic, {
-  root: path.resolve("./renders"),
-  prefix: "/renders/",
-  decorateReply: false
-});
-
 app.get("/health", async () => ({
   status: "ok",
   service: "promovid-api"
@@ -54,13 +42,9 @@ const webDistPath = path.resolve(currentDirectory, "../../web/dist");
 const webIndexPath = path.join(webDistPath, "index.html");
 const webAssetsPath = path.join(webDistPath, "assets");
 
-if (existsSync(webAssetsPath)) {
-  await app.register(fastifyStatic, {
-    root: webAssetsPath,
-    prefix: "/assets/",
-    decorateReply: false
-  });
-}
+app.get("/files/*", async (request, reply) => sendStaticFile(reply, path.resolve(config.LOCAL_STORAGE_PATH), wildcardPath(request.params)));
+app.get("/renders/*", async (request, reply) => sendStaticFile(reply, path.resolve("./renders"), wildcardPath(request.params)));
+app.get("/assets/*", async (request, reply) => sendStaticFile(reply, webAssetsPath, wildcardPath(request.params)));
 
 app.get("/", async (_request, reply) => {
   reply.type("text/html").send(await readWebAppHtml());
@@ -113,4 +97,37 @@ async function readWebAppHtml() {
     </main>
   </body>
 </html>`;
+}
+
+async function sendStaticFile(reply: FastifyReply, root: string, relativePath: string) {
+  const safeRelativePath = decodeURIComponent(relativePath).replace(/^[/\\]+/, "");
+  const resolvedPath = path.resolve(root, safeRelativePath);
+  const relativeToRoot = path.relative(root, resolvedPath);
+
+  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot) || !existsSync(resolvedPath)) {
+    reply.code(404).send({ error: "Not found" });
+    return;
+  }
+
+  reply.type(contentTypeFor(resolvedPath)).send(createReadStream(resolvedPath));
+}
+
+function wildcardPath(params: unknown) {
+  return typeof params === "object" && params && "*" in params ? String((params as Record<string, unknown>)["*"]) : "";
+}
+
+function contentTypeFor(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  const contentTypes: Record<string, string> = {
+    ".css": "text/css",
+    ".html": "text/html",
+    ".js": "application/javascript",
+    ".json": "application/json",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp"
+  };
+  return contentTypes[extension] ?? "application/octet-stream";
 }
