@@ -5,6 +5,10 @@ export interface Scene {
   visualPrompt: string;
   durationSeconds: number;
   order: number;
+  mediaUrl?: string | null;
+  voiceUrl?: string | null;
+  musicUrl?: string | null;
+  clipUrl?: string | null;
 }
 
 export interface RenderJob {
@@ -48,4 +52,13 @@ export interface Provider {
   enabled: boolean;
   hasSecret: boolean;
   config?: Record<string, unknown>;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  entity: string;
+  entityId?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
 }

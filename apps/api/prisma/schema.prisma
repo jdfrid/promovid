@@ -108,6 +108,11 @@ model Scene {
   visualPrompt   String
   durationSeconds Int
   assetId        String?
+  mediaUrl       String?
+  voiceUrl       String?
+  musicUrl       String?
+  clipUrl        String?
+  renderLog      Json     @default("{}")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

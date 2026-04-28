@@ -349,6 +349,29 @@ textarea {
   color: #f7f7fb;
 }
 
+.scene-assets,
+.download-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.scene-assets a,
+.download-card {
+  border: 1px solid #323957;
+  border-radius: 999px;
+  background: rgba(109, 93, 252, 0.14);
+  color: #dfe2ff;
+  padding: 8px 12px;
+  text-decoration: none;
+}
+
+.download-card {
+  border-radius: 14px;
+  min-width: 180px;
+}
+
 .muted,
 .scene small,
 .item-card span,

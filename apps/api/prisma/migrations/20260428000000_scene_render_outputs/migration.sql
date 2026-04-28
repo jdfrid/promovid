@@ -1,0 +1,6 @@
+ALTER TABLE "Scene"
+ADD COLUMN "mediaUrl" TEXT,
+ADD COLUMN "voiceUrl" TEXT,
+ADD COLUMN "musicUrl" TEXT,
+ADD COLUMN "clipUrl" TEXT,
+ADD COLUMN "renderLog" JSONB NOT NULL DEFAULT '{}';

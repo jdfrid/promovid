@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { apiGet, apiPatch, apiPost, absoluteAssetUrl } from "./api";
-import type { Asset, Project, Provider, RenderJob } from "./types";
+import type { Asset, AuditLog, Project, Provider, RenderJob } from "./types";
 import "./styles.css";
 
 type Section = "dashboard" | "create" | "assets" | "settings";
@@ -131,6 +131,7 @@ function CreateVideo() {
   const [project, setProject] = useState<Project>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [renderLogs, setRenderLogs] = useState<AuditLog[]>([]);
   const [actionLogs, setActionLogs] = useState<OperationLog[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("promovid:create-logs") ?? "[]") as OperationLog[];
@@ -147,6 +148,17 @@ function CreateVideo() {
   useEffect(() => {
     localStorage.setItem("promovid:create-logs", JSON.stringify(actionLogs.slice(0, 80)));
   }, [actionLogs]);
+
+  useEffect(() => {
+    if (!project || project.status !== "RENDERING") {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshProject(project.id);
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [project]);
 
   function addLog(step: string, message: string, metadata?: Record<string, unknown>) {
     setActionLogs((current) => [
@@ -200,6 +212,7 @@ function CreateVideo() {
       await apiPost<RenderJob>(`/projects/${project.id}/render`);
       setProject({ ...project, status: "RENDERING" });
       addLog("render_request_queued", "הרינדור נכנס לתור", { projectId: project.id });
+      await refreshProject(project.id);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "שליחה לרינדור נכשלה";
       setError(message);
@@ -207,6 +220,18 @@ function CreateVideo() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function refreshProject(projectId: string) {
+    const [projects, logs] = await Promise.all([
+      apiGet<Project[]>("/projects"),
+      apiGet<AuditLog[]>(`/projects/${projectId}/logs`)
+    ]);
+    const updated = projects.find((item) => item.id === projectId);
+    if (updated) {
+      setProject(updated);
+    }
+    setRenderLogs(logs);
   }
 
   const steps = ["תסריט", "מדיה", "קול", "הגדרות", "יצירה"];
@@ -257,11 +282,42 @@ function CreateVideo() {
               <strong>{scene.title}</strong>
               <p>{scene.narration}</p>
               <small>{scene.visualPrompt} · {scene.durationSeconds}s</small>
+              <div className="scene-assets">
+                {scene.mediaUrl && <a href={scene.mediaUrl} target="_blank">מדיה שנבחרה</a>}
+                {scene.voiceUrl && <a href={absoluteAssetUrl(scene.voiceUrl)} target="_blank">קול</a>}
+                {scene.musicUrl && <a href={absoluteAssetUrl(scene.musicUrl)} target="_blank">מוסיקה</a>}
+                {scene.clipUrl && <a href={absoluteAssetUrl(scene.clipUrl)} target="_blank" download>הורדת קליפ סצנה</a>}
+              </div>
             </article>
           ))}
-          {project && <button className="primary" disabled={busy} onClick={renderProject}>שליחה לרינדור</button>}
+          {project && <button className="primary" disabled={busy || project.status === "RENDERING"} onClick={renderProject}>
+            {project.status === "RENDERING" ? "מרנדר..." : "שליחה לרינדור"}
+          </button>}
         </div>
       </div>
+      {project && (
+        <div className="panel">
+          <div className="log-header">
+            <h3>תוצרי רינדור</h3>
+            <button className="secondary" onClick={() => void refreshProject(project.id)}>רענון סטטוס</button>
+          </div>
+          <div className="download-grid">
+            {project.renderJobs?.filter((job) => job.outputUrl).map((job) => (
+              <a key={job.id} className="download-card" href={absoluteAssetUrl(job.outputUrl)} target="_blank" download>
+                סרטון סופי · {job.status}
+              </a>
+            ))}
+            {project.scenes.filter((scene) => scene.clipUrl).map((scene) => (
+              <a key={scene.id} className="download-card" href={absoluteAssetUrl(scene.clipUrl)} target="_blank" download>
+                קליפ סצנה {scene.order + 1} · {scene.durationSeconds}s
+              </a>
+            ))}
+            {!project.renderJobs?.some((job) => job.outputUrl) && !project.scenes.some((scene) => scene.clipUrl) && (
+              <p className="muted">עדיין אין קבצי וידאו להורדה. לאחר הרינדור יופיעו כאן הסרטונים.</p>
+            )}
+          </div>
+        </div>
+      )}
       <div className="panel">
         <div className="log-header">
           <h3>לוג פעולות</h3>
@@ -278,6 +334,24 @@ function CreateVideo() {
           ))}
         </div>
       </div>
+      {project && (
+        <div className="panel">
+          <div className="log-header">
+            <h3>לוג רינדור מהשרת</h3>
+            <button className="secondary" onClick={() => void refreshProject(project.id)}>רענון לוג</button>
+          </div>
+          {renderLogs.length === 0 && <p className="muted">לוג הרינדור יופיע לאחר שליחה לרינדור.</p>}
+          <div className="operation-log">
+            {renderLogs.map((log) => (
+              <article key={log.id}>
+                <strong>{String(log.metadata?.message ?? log.action)}</strong>
+                <span>{new Date(log.createdAt).toLocaleTimeString("he-IL")} · {log.action}</span>
+                {log.metadata && <code>{JSON.stringify(log.metadata)}</code>}
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

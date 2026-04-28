@@ -35,6 +35,40 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: projects };
   });
 
+  app.get("/projects/:projectId", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: params.projectId, tenantId: tenant.id },
+      include: {
+        scenes: { orderBy: { order: "asc" } },
+        renderJobs: { orderBy: { createdAt: "desc" } }
+      }
+    });
+    return { data: project };
+  });
+
+  app.get("/projects/:projectId/logs", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const jobs = await prisma.renderJob.findMany({
+      where: { projectId: params.projectId, tenantId: tenant.id },
+      select: { id: true }
+    });
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        tenantId: tenant.id,
+        OR: [
+          { entity: "Project", entityId: params.projectId },
+          { entity: "RenderJob", entityId: { in: jobs.map((job) => job.id) } }
+        ]
+      },
+      orderBy: { createdAt: "desc" },
+      take: 120
+    });
+    return { data: logs };
+  });
+
   app.post("/projects", async (request, reply) => {
     const operationLogs: OperationLog[] = [];
     const input = createProjectSchema.parse(request.body);
@@ -143,6 +177,24 @@ export async function projectRoutes(app: FastifyInstance) {
 
     reply.code(202);
     return { data: renderJob };
+  });
+
+  app.get("/projects/:projectId/logs", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        tenantId: tenant.id,
+        OR: [
+          { entity: "Project", entityId: params.projectId },
+          { entity: "RenderJob", metadata: { path: ["projectId"], equals: params.projectId } }
+        ]
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+
+    return { data: logs };
   });
 }
 

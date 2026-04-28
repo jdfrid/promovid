@@ -16,6 +16,7 @@ export default [
         FormData: "readonly",
         localStorage: "readonly",
         Response: "readonly",
+        window: "readonly",
         document: "readonly",
         console: "readonly",
         import: "readonly"

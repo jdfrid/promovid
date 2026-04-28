@@ -59,6 +59,43 @@ export async function renderVideo(input: RenderInput) {
   };
 }
 
+export async function renderSceneClip(input: {
+  projectId: string;
+  scene: Scene;
+  aspectRatio: string;
+  mediaUrl?: string;
+}) {
+  const outputDirectory = path.resolve("./renders");
+  await mkdir(outputDirectory, { recursive: true });
+  const filename = `${input.projectId}-scene-${input.scene.order + 1}-${nanoid(8)}.mp4`;
+  const outputPath = path.join(outputDirectory, filename);
+  const { width, height } = dimensionsFor(input.aspectRatio);
+  const title = escapeDrawText(input.scene.title);
+  const narration = escapeDrawText(input.scene.narration);
+
+  await new Promise<void>((resolve, reject) => {
+    const command = ffmpeg()
+      .input(`color=c=#151827:s=${width}x${height}:d=${input.scene.durationSeconds}`)
+      .inputFormat("lavfi")
+      .videoFilters([
+        `drawtext=text='${title}':fontcolor=white:fontsize=${Math.round(width / 16)}:x=(w-text_w)/2:y=h*0.18`,
+        `drawtext=text='${narration}':fontcolor=white:fontsize=${Math.round(width / 30)}:x=(w-text_w)/2:y=h*0.48:box=1:boxcolor=black@0.35:boxborderw=18`,
+        `drawtext=text='Scene ${input.scene.order + 1} / ${input.scene.durationSeconds}s':fontcolor=#b8b8ff:fontsize=${Math.round(width / 38)}:x=(w-text_w)/2:y=h*0.86`
+      ])
+      .outputOptions(["-pix_fmt yuv420p", "-movflags +faststart", "-r 30"])
+      .output(outputPath)
+      .on("end", () => resolve())
+      .on("error", reject);
+
+    command.run();
+  });
+
+  return {
+    outputPath,
+    outputUrl: localUrlForRender(filename)
+  };
+}
+
 function dimensionsFor(aspectRatio: string) {
   if (aspectRatio === "16:9") {
     return { width: 1280, height: 720 };
