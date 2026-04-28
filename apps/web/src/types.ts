@@ -47,4 +47,5 @@ export interface Provider {
   priority: number;
   enabled: boolean;
   hasSecret: boolean;
+  config?: Record<string, unknown>;
 }

@@ -57,7 +57,7 @@ export async function projectRoutes(app: FastifyInstance) {
       sourceLength: input.sourceText.length
     });
 
-    const scriptProvider = await prisma.providerCredential.findFirst({
+    const scriptProviders = await prisma.providerCredential.findMany({
       where: {
         tenantId: tenant.id,
         type: "SCRIPT",
@@ -65,25 +65,18 @@ export async function projectRoutes(app: FastifyInstance) {
       },
       orderBy: { priority: "asc" }
     });
-    logOperation("script_provider_selected", scriptProvider ? "נבחר ספק תסריט פעיל" : "לא נמצא ספק תסריט פעיל, משתמש ב-fallback מקומי", {
-      provider: scriptProvider?.provider,
-      priority: scriptProvider?.priority,
-      hasKey: Boolean(scriptProvider?.encryptedKey)
+    logOperation("script_providers_loaded", scriptProviders.length ? "נטענו ספקי תסריט פעילים לפי priority" : "לא נמצא ספק תסריט פעיל, משתמש ב-fallback מקומי", {
+      providerCount: scriptProviders.length,
+      providers: scriptProviders.map((provider) => ({
+        provider: provider.provider,
+        priority: provider.priority,
+        hasKey: Boolean(provider.encryptedKey)
+      }))
     });
 
     let scenes: Awaited<ReturnType<typeof generateScript>>;
     try {
-      scenes = await generateScript({
-        ...input,
-        onLog: logOperation,
-        provider: scriptProvider
-          ? {
-              provider: scriptProvider.provider,
-              apiKey: scriptProvider.encryptedKey ? decryptSecret(scriptProvider.encryptedKey) : undefined,
-              config: scriptProvider.config
-            }
-          : null
-      });
+      scenes = await generateScriptWithFailover(input, scriptProviders, logOperation);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Script generation failed";
       logOperation("script_generation_failed", "יצירת התסריט נכשלה", { error: message });
@@ -150,6 +143,51 @@ export async function projectRoutes(app: FastifyInstance) {
     reply.code(202);
     return { data: renderJob };
   });
+}
+
+async function generateScriptWithFailover(
+  input: z.infer<typeof createProjectSchema>,
+  scriptProviders: Awaited<ReturnType<typeof prisma.providerCredential.findMany>>,
+  logOperation: (step: string, message: string, metadata?: Record<string, unknown>) => void
+) {
+  if (scriptProviders.length === 0) {
+    return generateScript({ ...input, onLog: logOperation, provider: null });
+  }
+
+  const errors: string[] = [];
+  for (const provider of scriptProviders) {
+    logOperation("script_provider_attempt_start", "מנסה ליצור תסריט עם ספק", {
+      provider: provider.provider,
+      priority: provider.priority,
+      hasKey: Boolean(provider.encryptedKey)
+    });
+
+    try {
+      const scenes = await generateScript({
+        ...input,
+        onLog: logOperation,
+        provider: {
+          provider: provider.provider,
+          apiKey: provider.encryptedKey ? decryptSecret(provider.encryptedKey) : undefined,
+          config: provider.config
+        }
+      });
+      logOperation("script_provider_attempt_success", "ספק התסריט החזיר תוצאה תקינה", {
+        provider: provider.provider,
+        sceneCount: scenes.length
+      });
+      return scenes;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown provider error";
+      errors.push(`${provider.provider}: ${message}`);
+      logOperation("script_provider_attempt_failed", "ספק התסריט נכשל, ממשיך לספק הבא אם קיים", {
+        provider: provider.provider,
+        error: message
+      });
+    }
+  }
+
+  throw new Error(`All active SCRIPT providers failed. ${errors.join(" | ")}`);
 }
 
 async function writeAuditLogs(tenantId: string, logs: OperationLog[], projectId?: string) {

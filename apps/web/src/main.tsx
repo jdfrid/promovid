@@ -340,7 +340,7 @@ function Assets() {
 }
 
 const providerServiceTypes = [
-  { type: "SCRIPT", label: "תסריט", description: "מודלי AI לכתיבת תסריטים וחלוקה לסצנות.", presets: [["openai", "OpenAI Script Writer"], ["gemini", "Gemini Script Writer"], ["anthropic", "Claude Script Writer"]] },
+  { type: "SCRIPT", label: "תסריט", description: "מודלי AI לכתיבת תסריטים וחלוקה לסצנות.", presets: [["gemini", "Gemini Script Writer"], ["openai", "OpenAI Script Writer"], ["anthropic", "Claude Script Writer"]] },
   { type: "MEDIA", label: "מדיה", description: "חיפוש ושליפת תמונות ווידאו ממאגרים.", presets: [["pexels", "Pexels Media Search"], ["shutterstock", "Shutterstock"], ["unsplash", "Unsplash"]] },
   { type: "VOICE", label: "קול", description: "TTS וקריינות לסרטונים.", presets: [["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
   { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע וספריות סאונד.", presets: [["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
@@ -359,11 +359,13 @@ function Settings() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     type: "SCRIPT",
-    provider: "openai",
-    displayName: "OpenAI Script Writer",
+    provider: "gemini",
+    displayName: "Gemini Script Writer",
     apiKey: "",
     priority: 1,
-    enabled: true
+    enabled: true,
+    model: "gemini-1.5-flash",
+    temperature: 0.7
   });
   useEffect(() => {
     void apiGet<Provider[]>("/providers").then(setProviders);
@@ -391,7 +393,9 @@ function Settings() {
         displayName: activeService.presets[0]?.[1] ?? "",
         apiKey: "",
         priority: 1,
-        enabled: true
+        enabled: true,
+        model: "gemini-1.5-flash",
+        temperature: 0.7
       });
       return;
     }
@@ -405,7 +409,9 @@ function Settings() {
         displayName: provider.displayName,
         apiKey: "",
         priority: provider.priority,
-        enabled: provider.enabled
+        enabled: provider.enabled,
+        model: typeof provider.config?.model === "string" ? provider.config.model : "gemini-1.5-flash",
+        temperature: Number(provider.config?.temperature ?? 0.7)
       });
     }
   }
@@ -418,7 +424,13 @@ function Settings() {
         ...form,
         type: activeType,
         priority: Number(form.priority),
-        apiKey: form.apiKey.trim() || undefined
+        apiKey: form.apiKey.trim() || undefined,
+        config: activeType === "SCRIPT"
+          ? {
+              model: form.model.trim() || "gemini-1.5-flash",
+              temperature: Number(form.temperature)
+            }
+          : {}
       };
 
       if (selectedId === "new") {
@@ -458,7 +470,9 @@ function Settings() {
                 displayName: service.presets[0]?.[1] ?? "",
                 apiKey: "",
                 priority: 1,
-                enabled: true
+                enabled: true,
+                model: "gemini-1.5-flash",
+                temperature: 0.7
               });
             }}
           >
@@ -497,6 +511,16 @@ function Settings() {
           <label>API Key
             <input type="password" value={form.apiKey} placeholder="הדבק כאן מפתח חדש. להשאיר ריק כדי לא לשנות." onChange={(event) => setForm({ ...form, apiKey: event.target.value })} />
           </label>
+          {activeType === "SCRIPT" && (
+            <div className="row">
+              <label>מודל
+                <input value={form.model} placeholder="gemini-1.5-flash / gemini-2.0-flash" onChange={(event) => setForm({ ...form, model: event.target.value })} />
+              </label>
+              <label>Temperature
+                <input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: Number(event.target.value) })} />
+              </label>
+            </div>
+          )}
           <div className="row compact-row">
             <label>עדיפות
               <input type="number" min="1" value={form.priority} onChange={(event) => setForm({ ...form, priority: Number(event.target.value) })} />
@@ -517,7 +541,7 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-1.5-flash" : "", temperature: 0.7 });
               }}>
                 {displayName}
               </button>

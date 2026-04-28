@@ -102,11 +102,12 @@ async function generateGeminiScript(
 
   if (!response.ok) {
     const errorText = await response.text();
+    const readableError = formatGeminiError(errorText, response.status, model);
     request.onLog?.("gemini_request_failed", "Gemini החזיר שגיאה", {
       status: response.status,
-      errorPreview: errorText.slice(0, 500)
+      error: readableError
     });
-    throw new Error(`Gemini script generation failed: ${errorText}`);
+    throw new Error(readableError);
   }
 
   const payload = (await response.json()) as {
@@ -291,4 +292,29 @@ function readConfigValue(config: unknown, key: string) {
     return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
   }
   return undefined;
+}
+
+function formatGeminiError(errorText: string, status: number, model: string) {
+  try {
+    const parsed = JSON.parse(errorText) as {
+      error?: {
+        status?: string;
+        message?: string;
+        details?: Array<{ "@type"?: string; retryDelay?: string }>;
+      };
+    };
+    const retryDelay = parsed.error?.details?.find((detail) => "retryDelay" in detail)?.retryDelay;
+
+    if (status === 429 || parsed.error?.status === "RESOURCE_EXHAUSTED") {
+      return [
+        `Gemini quota exhausted for model ${model}.`,
+        "בדוק שה־API key מחובר לפרויקט עם quota/billing פעיל, או שנה model במסך הגדרות > תסריט.",
+        retryDelay ? `Retry suggested by Google: ${retryDelay}.` : undefined
+      ].filter(Boolean).join(" ");
+    }
+
+    return `Gemini request failed (${parsed.error?.status ?? status}): ${parsed.error?.message ?? errorText}`;
+  } catch {
+    return `Gemini request failed (${status}): ${errorText.slice(0, 800)}`;
+  }
 }
