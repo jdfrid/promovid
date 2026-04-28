@@ -1,5 +1,5 @@
 import path from "node:path";
-import { createReadStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import fastify from "fastify";
@@ -109,7 +109,7 @@ async function sendStaticFile(reply: FastifyReply, root: string, relativePath: s
     return;
   }
 
-  reply.type(contentTypeFor(resolvedPath)).send(createReadStream(resolvedPath));
+  reply.type(contentTypeFor(resolvedPath)).send(await readFile(resolvedPath));
 }
 
 function routeParam(params: unknown, key: string) {
