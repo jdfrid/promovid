@@ -3,7 +3,7 @@ const apiUrl = import.meta.env.VITE_API_URL ?? "";
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${apiUrl}/api${path}`);
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(await readApiError(response));
   }
   const envelope = (await response.json()) as { data: T };
   return envelope.data;
@@ -16,7 +16,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     body: body instanceof FormData ? body : JSON.stringify(body ?? {})
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(await readApiError(response));
   }
   const envelope = (await response.json()) as { data: T };
   return envelope.data;
@@ -29,7 +29,7 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
     body: JSON.stringify(body ?? {})
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(await readApiError(response));
   }
   const envelope = (await response.json()) as { data: T };
   return envelope.data;
@@ -43,4 +43,14 @@ export function absoluteAssetUrl(url?: string | null) {
     return url;
   }
   return `${apiUrl}${url}`;
+}
+
+async function readApiError(response: Response) {
+  const text = await response.text();
+  try {
+    const parsed = JSON.parse(text) as { error?: string; message?: string };
+    return parsed.error ?? parsed.message ?? text;
+  } catch {
+    return text;
+  }
 }

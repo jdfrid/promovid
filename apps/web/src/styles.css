@@ -296,6 +296,48 @@ textarea {
   padding: 12px 14px;
 }
 
+.error-notice {
+  border-color: rgba(255, 96, 96, 0.35);
+  background: rgba(255, 96, 96, 0.12);
+  color: #ff9a9a;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.operation-log {
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.operation-log article {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(17, 20, 33, 0.72);
+  padding: 12px 14px;
+}
+
+.operation-log span {
+  color: #aeb5d9;
+  font-size: 0.84rem;
+}
+
+.operation-log code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #9ea6ff;
+  direction: ltr;
+  text-align: left;
+}
+
 .scene {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;

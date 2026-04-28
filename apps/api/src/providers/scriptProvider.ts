@@ -8,6 +8,7 @@ interface ScriptRequest {
   targetAudience?: string;
   aspectRatio?: string;
   provider?: ScriptProviderSettings | null;
+  onLog?: OperationLogger;
 }
 
 interface ScriptProviderSettings {
@@ -24,8 +25,10 @@ interface SourceContext {
   fetchError?: string;
 }
 
+type OperationLogger = (...args: [string, string, Record<string, unknown>?]) => void;
+
 export async function generateScript(request: ScriptRequest): Promise<SceneInput[]> {
-  const sourceContext = await buildSourceContext(request.sourceText);
+  const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
   if (request.provider) {
     if (!request.provider.apiKey) {
       throw new Error(`Script provider ${request.provider.provider} is enabled but has no API key.`);
@@ -70,6 +73,13 @@ async function generateGeminiScript(
 ): Promise<SceneInput[]> {
   const model = readConfigValue(provider.config, "model") ?? "gemini-2.0-flash";
   const prompt = buildGeminiPrompt(request, sourceContext);
+  request.onLog?.("gemini_prompt_ready", "נבנה prompt מפורט עבור Gemini", {
+    model,
+    promptLength: prompt.length,
+    hasUrl: Boolean(sourceContext.url),
+    hasPageText: Boolean(sourceContext.pageText)
+  });
+  request.onLog?.("gemini_request_start", "שולח בקשה ל-Gemini ליצירת תסריט", { model });
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(provider.apiKey ?? "")}`,
     {
@@ -91,14 +101,22 @@ async function generateGeminiScript(
   );
 
   if (!response.ok) {
-    throw new Error(`Gemini script generation failed: ${await response.text()}`);
+    const errorText = await response.text();
+    request.onLog?.("gemini_request_failed", "Gemini החזיר שגיאה", {
+      status: response.status,
+      errorPreview: errorText.slice(0, 500)
+    });
+    throw new Error(`Gemini script generation failed: ${errorText}`);
   }
 
   const payload = (await response.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
   };
   const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
-  return normalizeScenes(parseSceneResponse(text), request.duration);
+  request.onLog?.("gemini_response_received", "התקבלה תשובה מ-Gemini", { responseLength: text.length });
+  const scenes = normalizeScenes(parseSceneResponse(text), request.duration);
+  request.onLog?.("gemini_response_parsed", "תשובת Gemini פוענחה לסצנות", { sceneCount: scenes.length });
+  return scenes;
 }
 
 function buildGeminiPrompt(request: ScriptRequest, sourceContext: SourceContext) {
@@ -153,18 +171,32 @@ ${sourceContext.rawInput}
 `.trim();
 }
 
-async function buildSourceContext(rawInput: string): Promise<SourceContext> {
+async function buildSourceContext(rawInput: string, onLog?: OperationLogger): Promise<SourceContext> {
   const url = extractFirstUrl(rawInput);
   const instructions = url ? rawInput.replace(url, "").trim() : rawInput.trim();
+  onLog?.("source_input_received", "התקבל פריט מידע מהמסך", {
+    inputLength: rawInput.length,
+    hasUrl: Boolean(url),
+    instructionsLength: instructions.length
+  });
 
   if (!url) {
     return { rawInput, instructions };
   }
 
   try {
+    onLog?.("source_url_fetch_start", "מתחיל לקרוא תוכן מעמוד URL", { url });
     const pageText = await fetchPageText(url);
+    onLog?.("source_url_fetch_success", "תוכן העמוד נקרא בהצלחה", {
+      url,
+      extractedCharacters: pageText.length
+    });
     return { rawInput, url, instructions, pageText };
   } catch (error) {
+    onLog?.("source_url_fetch_failed", "קריאת תוכן העמוד נכשלה, ממשיך עם URL והוראות", {
+      url,
+      error: error instanceof Error ? error.message : "unknown error"
+    });
     return {
       rawInput,
       url,

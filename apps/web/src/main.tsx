@@ -6,6 +6,34 @@ import "./styles.css";
 
 type Section = "dashboard" | "create" | "assets" | "settings";
 
+interface OperationLog {
+  at: string;
+  step: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+const defaultCreateForm = {
+  title: "",
+  sourceText: "",
+  mode: "manual",
+  style: "מודרני, חד, מכירתי",
+  targetAudience: "לקוחות חדשים",
+  duration: 30,
+  aspectRatio: "9:16"
+};
+
+type CreateForm = typeof defaultCreateForm;
+
+function loadCreateForm(): CreateForm {
+  try {
+    const saved = localStorage.getItem("promovid:create-form");
+    return saved ? { ...defaultCreateForm, ...JSON.parse(saved) } : defaultCreateForm;
+  } catch {
+    return defaultCreateForm;
+  }
+}
+
 function App() {
   const [section, setSection] = useState<Section>("dashboard");
 
@@ -102,20 +130,60 @@ function Dashboard() {
 function CreateVideo() {
   const [project, setProject] = useState<Project>();
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({
-    title: "",
-    sourceText: "",
-    mode: "manual",
-    style: "מודרני, חד, מכירתי",
-    targetAudience: "לקוחות חדשים",
-    duration: 30,
-    aspectRatio: "9:16"
+  const [error, setError] = useState("");
+  const [actionLogs, setActionLogs] = useState<OperationLog[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("promovid:create-logs") ?? "[]") as OperationLog[];
+    } catch {
+      return [];
+    }
   });
+  const [form, setForm] = useState<CreateForm>(() => loadCreateForm());
+
+  useEffect(() => {
+    localStorage.setItem("promovid:create-form", JSON.stringify(form));
+  }, [form]);
+
+  useEffect(() => {
+    localStorage.setItem("promovid:create-logs", JSON.stringify(actionLogs.slice(0, 80)));
+  }, [actionLogs]);
+
+  function addLog(step: string, message: string, metadata?: Record<string, unknown>) {
+    setActionLogs((current) => [
+      { at: new Date().toISOString(), step, message, metadata },
+      ...current
+    ].slice(0, 80));
+  }
+
+  function updateForm<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
+    setForm((current) => ({ ...current, [key]: value }));
+    addLog("form_updated", `עודכן השדה ${String(key)}`, { field: key, value: key === "sourceText" ? `${String(value).slice(0, 140)}...` : value });
+  }
 
   async function createProject() {
     setBusy(true);
+    setError("");
+    addLog("create_script_clicked", "נלחץ כפתור יצירת תסריט", {
+      title: form.title,
+      duration: form.duration,
+      aspectRatio: form.aspectRatio,
+      sourceLength: form.sourceText.length
+    });
     try {
-      setProject(await apiPost<Project>("/projects", form));
+      addLog("create_script_request_sent", "שולח את הערכים לשרת");
+      const createdProject = await apiPost<Project & { operationLogs?: OperationLog[] }>("/projects", form);
+      setProject(createdProject);
+      addLog("create_script_response_received", "התקבלה תשובה מהשרת", {
+        projectId: createdProject.id,
+        sceneCount: createdProject.scenes.length
+      });
+      if (createdProject.operationLogs?.length) {
+        setActionLogs((current) => [...createdProject.operationLogs!.reverse(), ...current].slice(0, 80));
+      }
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "יצירת התסריט נכשלה";
+      setError(message);
+      addLog("create_script_failed", "יצירת התסריט נכשלה", { error: message });
     } finally {
       setBusy(false);
     }
@@ -126,9 +194,16 @@ function CreateVideo() {
       return;
     }
     setBusy(true);
+    setError("");
+    addLog("render_request_sent", "שולח את הפרויקט לרינדור", { projectId: project.id });
     try {
       await apiPost<RenderJob>(`/projects/${project.id}/render`);
       setProject({ ...project, status: "RENDERING" });
+      addLog("render_request_queued", "הרינדור נכנס לתור", { projectId: project.id });
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "שליחה לרינדור נכשלה";
+      setError(message);
+      addLog("render_request_failed", "שליחה לרינדור נכשלה", { error: message });
     } finally {
       setBusy(false);
     }
@@ -145,33 +220,34 @@ function CreateVideo() {
       <div className="steps">{steps.map((step) => <span key={step}>{step}</span>)}</div>
       <div className="two-col">
         <div className="panel">
-          <label>כותרת הסרטון<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+          <label>כותרת הסרטון<input value={form.title} onChange={(event) => updateForm("title", event.target.value)} /></label>
           <label>פריט מידע, קישור והוראות
             <textarea
               value={form.sourceText}
               placeholder={"אפשר להדביק URL והוראות, לדוגמה:\nhttps://example.com/product\nתכין סרטון פרסומת למוצר הזה"}
-              onChange={(event) => setForm({ ...form, sourceText: event.target.value })}
+              onChange={(event) => updateForm("sourceText", event.target.value)}
             />
           </label>
-          <label>מצב יצירה<select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}>
+          <label>מצב יצירה<select value={form.mode} onChange={(event) => updateForm("mode", event.target.value)}>
             <option value="manual">ידני</option>
             <option value="automatic">אוטומטי</option>
             <option value="assisted">חצי-אוטומטי</option>
             <option value="series">סדרה</option>
           </select></label>
-          <label>סגנון<input value={form.style} onChange={(event) => setForm({ ...form, style: event.target.value })} /></label>
-          <label>קהל יעד<input value={form.targetAudience} onChange={(event) => setForm({ ...form, targetAudience: event.target.value })} /></label>
+          <label>סגנון<input value={form.style} onChange={(event) => updateForm("style", event.target.value)} /></label>
+          <label>קהל יעד<input value={form.targetAudience} onChange={(event) => updateForm("targetAudience", event.target.value)} /></label>
           <div className="row">
-            <label>אורך<select value={form.duration} onChange={(event) => setForm({ ...form, duration: Number(event.target.value) })}>
+            <label>אורך<select value={form.duration} onChange={(event) => updateForm("duration", Number(event.target.value))}>
               {[15, 30, 45, 60].map((duration) => <option key={duration} value={duration}>{duration}</option>)}
             </select></label>
-            <label>יחס תצוגה<select value={form.aspectRatio} onChange={(event) => setForm({ ...form, aspectRatio: event.target.value })}>
+            <label>יחס תצוגה<select value={form.aspectRatio} onChange={(event) => updateForm("aspectRatio", event.target.value)}>
               <option>9:16</option>
               <option>16:9</option>
               <option>1:1</option>
             </select></label>
           </div>
-          <button className="primary" disabled={busy || !form.title || !form.sourceText} onClick={createProject}>יצירת תסריט</button>
+          <button className="primary" disabled={busy || !form.title || !form.sourceText} onClick={createProject}>{busy ? "מעבד..." : "יצירת תסריט"}</button>
+          {error && <p className="notice error-notice">{error}</p>}
         </div>
         <div className="panel">
           <h3>תסריט וסצנות</h3>
@@ -184,6 +260,22 @@ function CreateVideo() {
             </article>
           ))}
           {project && <button className="primary" disabled={busy} onClick={renderProject}>שליחה לרינדור</button>}
+        </div>
+      </div>
+      <div className="panel">
+        <div className="log-header">
+          <h3>לוג פעולות</h3>
+          <button className="secondary" onClick={() => setActionLogs([])}>ניקוי לוג</button>
+        </div>
+        {actionLogs.length === 0 && <p className="muted">הלוג יופיע כאן מרגע הזנת הערכים ושליחת התסריט.</p>}
+        <div className="operation-log">
+          {actionLogs.map((log, index) => (
+            <article key={`${log.at}-${index}`}>
+              <strong>{log.message}</strong>
+              <span>{new Date(log.at).toLocaleTimeString("he-IL")} · {log.step}</span>
+              {log.metadata && <code>{JSON.stringify(log.metadata)}</code>}
+            </article>
+          ))}
         </div>
       </div>
     </section>
@@ -261,7 +353,7 @@ const providerServiceTypes = [
 
 function Settings() {
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [activeType, setActiveType] = useState("SCRIPT");
+  const [activeType, setActiveType] = useState(() => localStorage.getItem("promovid:settings-active-type") ?? "SCRIPT");
   const [selectedId, setSelectedId] = useState<string>("new");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -276,6 +368,10 @@ function Settings() {
   useEffect(() => {
     void apiGet<Provider[]>("/providers").then(setProviders);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("promovid:settings-active-type", activeType);
+  }, [activeType]);
 
   const activeService = providerServiceTypes.find((service) => service.type === activeType) ?? providerServiceTypes[0];
   const activeProviders = useMemo(() => providers.filter((provider) => provider.type === activeType), [activeType, providers]);

@@ -14,6 +14,8 @@ export default [
       globals: {
         fetch: "readonly",
         FormData: "readonly",
+        localStorage: "readonly",
+        Response: "readonly",
         document: "readonly",
         console: "readonly",
         import: "readonly"

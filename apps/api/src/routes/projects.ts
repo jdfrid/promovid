@@ -7,6 +7,13 @@ import { decryptSecret } from "../crypto.js";
 
 const tenantSlug = "demo";
 
+interface OperationLog {
+  at: string;
+  step: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
 const createProjectSchema = z.object({
   title: z.string().min(2),
   sourceText: z.string().min(2),
@@ -29,8 +36,27 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   app.post("/projects", async (request, reply) => {
+    const operationLogs: OperationLog[] = [];
     const input = createProjectSchema.parse(request.body);
     const tenant = await getDemoTenant();
+    const logOperation = (step: string, message: string, metadata?: Record<string, unknown>) => {
+      const entry = {
+        at: new Date().toISOString(),
+        step,
+        message,
+        metadata
+      };
+      operationLogs.push(entry);
+      request.log.info({ step, metadata }, message);
+    };
+
+    logOperation("project_create_received", "התקבלה בקשה ליצירת תסריט", {
+      title: input.title,
+      duration: input.duration,
+      aspectRatio: input.aspectRatio,
+      sourceLength: input.sourceText.length
+    });
+
     const scriptProvider = await prisma.providerCredential.findFirst({
       where: {
         tenantId: tenant.id,
@@ -39,16 +65,33 @@ export async function projectRoutes(app: FastifyInstance) {
       },
       orderBy: { priority: "asc" }
     });
-    const scenes = await generateScript({
-      ...input,
-      provider: scriptProvider
-        ? {
-            provider: scriptProvider.provider,
-            apiKey: scriptProvider.encryptedKey ? decryptSecret(scriptProvider.encryptedKey) : undefined,
-            config: scriptProvider.config
-          }
-        : null
+    logOperation("script_provider_selected", scriptProvider ? "נבחר ספק תסריט פעיל" : "לא נמצא ספק תסריט פעיל, משתמש ב-fallback מקומי", {
+      provider: scriptProvider?.provider,
+      priority: scriptProvider?.priority,
+      hasKey: Boolean(scriptProvider?.encryptedKey)
     });
+
+    let scenes: Awaited<ReturnType<typeof generateScript>>;
+    try {
+      scenes = await generateScript({
+        ...input,
+        onLog: logOperation,
+        provider: scriptProvider
+          ? {
+              provider: scriptProvider.provider,
+              apiKey: scriptProvider.encryptedKey ? decryptSecret(scriptProvider.encryptedKey) : undefined,
+              config: scriptProvider.config
+            }
+          : null
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Script generation failed";
+      logOperation("script_generation_failed", "יצירת התסריט נכשלה", { error: message });
+      await writeAuditLogs(tenant.id, operationLogs);
+      reply.code(500);
+      return { error: message, operationLogs };
+    }
+    logOperation("script_generation_complete", "יצירת התסריט הסתיימה", { sceneCount: scenes.length });
 
     const project = await prisma.project.create({
       data: {
@@ -70,9 +113,11 @@ export async function projectRoutes(app: FastifyInstance) {
       },
       include: { scenes: true }
     });
+    logOperation("project_created", "הפרויקט והסצנות נשמרו במסד הנתונים", { projectId: project.id });
+    await writeAuditLogs(tenant.id, operationLogs, project.id);
 
     reply.code(201);
-    return { data: project };
+    return { data: { ...project, operationLogs } };
   });
 
   app.post("/projects/:projectId/render", async (request, reply) => {
@@ -104,6 +149,26 @@ export async function projectRoutes(app: FastifyInstance) {
 
     reply.code(202);
     return { data: renderJob };
+  });
+}
+
+async function writeAuditLogs(tenantId: string, logs: OperationLog[], projectId?: string) {
+  if (logs.length === 0) {
+    return;
+  }
+
+  await prisma.auditLog.createMany({
+    data: logs.map((log) => ({
+      tenantId,
+      action: log.step,
+      entity: "Project",
+      entityId: projectId,
+      metadata: {
+        message: log.message,
+        at: log.at,
+        ...(log.metadata ?? {})
+      }
+    }))
   });
 }
 
