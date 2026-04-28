@@ -42,9 +42,9 @@ const webDistPath = path.resolve(currentDirectory, "../../web/dist");
 const webIndexPath = path.join(webDistPath, "index.html");
 const webAssetsPath = path.join(webDistPath, "assets");
 
-app.get("/files/*", async (request, reply) => sendStaticFile(reply, path.resolve(config.LOCAL_STORAGE_PATH), wildcardPath(request.params)));
-app.get("/renders/*", async (request, reply) => sendStaticFile(reply, path.resolve("./renders"), wildcardPath(request.params)));
-app.get("/assets/*", async (request, reply) => sendStaticFile(reply, webAssetsPath, wildcardPath(request.params)));
+app.get("/files/:filename", async (request, reply) => sendStaticFile(reply, path.resolve(config.LOCAL_STORAGE_PATH), routeParam(request.params, "filename")));
+app.get("/renders/:filename", async (request, reply) => sendStaticFile(reply, path.resolve("./renders"), routeParam(request.params, "filename")));
+app.get("/assets/:filename", async (request, reply) => sendStaticFile(reply, webAssetsPath, routeParam(request.params, "filename")));
 
 app.get("/", async (_request, reply) => {
   reply.type("text/html").send(await readWebAppHtml());
@@ -112,8 +112,8 @@ async function sendStaticFile(reply: FastifyReply, root: string, relativePath: s
   reply.type(contentTypeFor(resolvedPath)).send(createReadStream(resolvedPath));
 }
 
-function wildcardPath(params: unknown) {
-  return typeof params === "object" && params && "*" in params ? String((params as Record<string, unknown>)["*"]) : "";
+function routeParam(params: unknown, key: string) {
+  return typeof params === "object" && params && key in params ? String((params as Record<string, unknown>)[key]) : "";
 }
 
 function contentTypeFor(filePath: string) {

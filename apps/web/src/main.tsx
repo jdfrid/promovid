@@ -1,10 +1,37 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { Component, StrictMode, useEffect, useMemo, useState } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { apiGet, apiPatch, apiPost, absoluteAssetUrl } from "./api";
 import type { Asset, AuditLog, Project, Provider, RenderJob } from "./types";
 import "./styles.css";
 
 type Section = "dashboard" | "create" | "assets" | "settings";
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
+  state: { error?: Error } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("AdBot frontend crashed", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="boot-error">
+          <h1>שגיאת טעינת ממשק</h1>
+          <p>{this.state.error.message}</p>
+          <button onClick={() => window.location.reload()}>טעינה מחדש</button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 interface OperationLog {
   at: string;
@@ -64,12 +91,15 @@ function App() {
 function Dashboard() {
   const [dashboard, setDashboard] = useState<{ stats: Record<string, number>; recentJobs: RenderJob[] }>();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     void Promise.all([
       apiGet<{ stats: Record<string, number>; recentJobs: RenderJob[] }>("/dashboard").then(setDashboard),
       apiGet<Project[]>("/projects").then(setProjects)
-    ]);
+    ]).catch((error: unknown) => {
+      setLoadError(error instanceof Error ? error.message : "טעינת Dashboard נכשלה");
+    });
   }, []);
 
   const stats = dashboard?.stats ?? { videosThisWeek: 0, distributed: 0, errors: 0, queued: 0 };
@@ -80,6 +110,7 @@ function Dashboard() {
         <p className="eyebrow">תמונת מצב</p>
         <h2>Dashboard</h2>
       </div>
+      {loadError && <p className="notice error-notice">{loadError}</p>}
       <div className="cards">
         <Stat label="סרטונים השבוע" value={stats.videosThisWeek} />
         <Stat label="הושלמו" value={stats.distributed} />
@@ -663,6 +694,8 @@ function Badge({ value }: { value: string }) {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </StrictMode>
 );

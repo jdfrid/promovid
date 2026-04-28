@@ -12,6 +12,26 @@ body {
   margin: 0;
 }
 
+.boot-error {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  padding: 32px;
+  text-align: center;
+  background: #0f111a;
+  color: #fff;
+}
+
+.boot-error button {
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #6d5dfc, #18c2ff);
+  color: #fff;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
 button,
 input,
 select,
