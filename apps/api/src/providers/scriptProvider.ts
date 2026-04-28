@@ -71,7 +71,7 @@ async function generateGeminiScript(
   provider: ScriptProviderSettings,
   sourceContext: SourceContext
 ): Promise<SceneInput[]> {
-  const model = readConfigValue(provider.config, "model") ?? "gemini-2.0-flash";
+  const model = normalizeGeminiModel(readConfigValue(provider.config, "model") ?? "gemini-2.5-flash-lite");
   const prompt = buildGeminiPrompt(request, sourceContext);
   request.onLog?.("gemini_prompt_ready", "נבנה prompt מפורט עבור Gemini", {
     model,
@@ -317,4 +317,11 @@ function formatGeminiError(errorText: string, status: number, model: string) {
   } catch {
     return `Gemini request failed (${status}): ${errorText.slice(0, 800)}`;
   }
+}
+
+function normalizeGeminiModel(model: string) {
+  if (model === "gemini-1.5-flash") {
+    return "gemini-2.5-flash-lite";
+  }
+  return model;
 }

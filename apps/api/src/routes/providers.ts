@@ -38,8 +38,26 @@ export async function providerRoutes(app: FastifyInstance) {
   app.post("/providers", async (request, reply) => {
     const input = providerSchema.parse(request.body);
     const tenant = await getDemoTenant();
-    const provider = await prisma.providerCredential.create({
-      data: {
+    const existing = await prisma.providerCredential.findFirst({
+      where: {
+        tenantId: tenant.id,
+        type: input.type,
+        provider: input.provider
+      }
+    });
+    const provider = existing
+      ? await prisma.providerCredential.update({
+        where: { id: existing.id },
+        data: {
+          displayName: input.displayName,
+          encryptedKey: input.apiKey ? encryptSecret(input.apiKey) : existing.encryptedKey,
+          priority: input.priority,
+          enabled: input.enabled,
+          config: input.config as Prisma.InputJsonValue
+        }
+      })
+      : await prisma.providerCredential.create({
+        data: {
         tenantId: tenant.id,
         type: input.type,
         provider: input.provider,
@@ -48,10 +66,10 @@ export async function providerRoutes(app: FastifyInstance) {
         priority: input.priority,
         enabled: input.enabled,
         config: input.config as Prisma.InputJsonValue
-      }
-    });
+        }
+      });
 
-    reply.code(201);
+    reply.code(existing ? 200 : 201);
     return { data: { ...provider, encryptedKey: undefined, hasSecret: Boolean(provider.encryptedKey) } };
   });
 

@@ -57,7 +57,7 @@ export async function projectRoutes(app: FastifyInstance) {
       sourceLength: input.sourceText.length
     });
 
-    const scriptProviders = await prisma.providerCredential.findMany({
+    const scriptProvidersRaw = await prisma.providerCredential.findMany({
       where: {
         tenantId: tenant.id,
         type: "SCRIPT",
@@ -65,6 +65,7 @@ export async function projectRoutes(app: FastifyInstance) {
       },
       orderBy: { priority: "asc" }
     });
+    const scriptProviders = dedupeProvidersByName(scriptProvidersRaw);
     logOperation("script_providers_loaded", scriptProviders.length ? "נטענו ספקי תסריט פעילים לפי priority" : "לא נמצא ספק תסריט פעיל, משתמש ב-fallback מקומי", {
       providerCount: scriptProviders.length,
       providers: scriptProviders.map((provider) => ({
@@ -179,7 +180,9 @@ async function generateScriptWithFailover(
       return scenes;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown provider error";
-      errors.push(`${provider.provider}: ${message}`);
+      if (!errors.includes(message)) {
+        errors.push(message);
+      }
       logOperation("script_provider_attempt_failed", "ספק התסריט נכשל, ממשיך לספק הבא אם קיים", {
         provider: provider.provider,
         error: message
@@ -188,6 +191,18 @@ async function generateScriptWithFailover(
   }
 
   throw new Error(`All active SCRIPT providers failed. ${errors.join(" | ")}`);
+}
+
+function dedupeProvidersByName<T extends { provider: string }>(providers: T[]) {
+  const seen = new Set<string>();
+  return providers.filter((provider) => {
+    const key = provider.provider.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 async function writeAuditLogs(tenantId: string, logs: OperationLog[], projectId?: string) {

@@ -364,7 +364,7 @@ function Settings() {
     apiKey: "",
     priority: 1,
     enabled: true,
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash-lite",
     temperature: 0.7
   });
   useEffect(() => {
@@ -394,7 +394,7 @@ function Settings() {
         apiKey: "",
         priority: 1,
         enabled: true,
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash-lite",
         temperature: 0.7
       });
       return;
@@ -410,7 +410,7 @@ function Settings() {
         apiKey: "",
         priority: provider.priority,
         enabled: provider.enabled,
-        model: typeof provider.config?.model === "string" ? provider.config.model : "gemini-1.5-flash",
+        model: typeof provider.config?.model === "string" ? provider.config.model : "gemini-2.5-flash-lite",
         temperature: Number(provider.config?.temperature ?? 0.7)
       });
     }
@@ -427,7 +427,7 @@ function Settings() {
         apiKey: form.apiKey.trim() || undefined,
         config: activeType === "SCRIPT"
           ? {
-              model: form.model.trim() || "gemini-1.5-flash",
+              model: form.model.trim() || "gemini-2.5-flash-lite",
               temperature: Number(form.temperature)
             }
           : {}
@@ -471,7 +471,7 @@ function Settings() {
                 apiKey: "",
                 priority: 1,
                 enabled: true,
-                model: "gemini-1.5-flash",
+                model: "gemini-2.5-flash-lite",
                 temperature: 0.7
               });
             }}
@@ -514,7 +514,13 @@ function Settings() {
           {activeType === "SCRIPT" && (
             <div className="row">
               <label>מודל
-                <input value={form.model} placeholder="gemini-1.5-flash / gemini-2.0-flash" onChange={(event) => setForm({ ...form, model: event.target.value })} />
+                <input list="gemini-models" value={form.model} placeholder="gemini-2.5-flash-lite" onChange={(event) => setForm({ ...form, model: event.target.value })} />
+                <datalist id="gemini-models">
+                  <option value="gemini-2.5-flash-lite" />
+                  <option value="gemini-2.5-flash" />
+                  <option value="gemini-2.0-flash" />
+                  <option value="gemini-2.0-flash-lite" />
+                </datalist>
               </label>
               <label>Temperature
                 <input type="number" min="0" max="2" step="0.1" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: Number(event.target.value) })} />
@@ -541,7 +547,7 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-1.5-flash" : "", temperature: 0.7 });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7 });
               }}>
                 {displayName}
               </button>
