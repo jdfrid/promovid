@@ -19,9 +19,9 @@ services:
           name: promovid-redis
           property: connectionString
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: ENCRYPTION_KEY
-        generateValue: true
+        sync: false
       - key: LOCAL_STORAGE_PATH
         value: /app/uploads
 

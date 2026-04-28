@@ -24,7 +24,12 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
     log.push({ step: "media_provider_attempt", message: "מחפש מדיה לסצנה", metadata: { provider: provider.provider, sceneId: scene.id } });
 
     if (provider.provider.toLowerCase().includes("pexels") && provider.encryptedKey) {
-      const result = await searchPexels(scene.visualPrompt || scene.narration, decryptSecret(provider.encryptedKey));
+      const apiKey = safeDecryptProviderKey(provider.encryptedKey, provider.provider, log);
+      if (!apiKey) {
+        continue;
+      }
+
+      const result = await searchPexels(scene.visualPrompt || scene.narration, apiKey);
       if (result) {
         log.push({ step: "media_provider_success", message: "נמצאה מדיה מתאימה", metadata: { provider: provider.provider, url: result } });
         return result;
@@ -36,6 +41,23 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
 
   log.push({ step: "media_fallback", message: "לא נמצאה מדיה חיצונית, משתמש ברקע גרפי" });
   return undefined;
+}
+
+function safeDecryptProviderKey(encryptedKey: string, provider: string, log: SceneAssets["log"]) {
+  try {
+    return decryptSecret(encryptedKey);
+  } catch (error) {
+    log.push({
+      step: "provider_key_decrypt_failed",
+      message: "פענוח מפתח הספק נכשל; מדלג לספק הבא או לרקע גרפי",
+      metadata: {
+        provider,
+        reason: error instanceof Error ? error.message : "unknown decrypt error",
+        hint: "ודא שה־ENCRYPTION_KEY זהה בשירות web ובשירות worker ב־Render"
+      }
+    });
+    return undefined;
+  }
 }
 
 async function createVoice(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"]) {
