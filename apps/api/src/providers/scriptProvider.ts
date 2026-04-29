@@ -158,7 +158,7 @@ ${sourceContext.rawInput}
     {
       "title": "שם קצר לסצנה",
       "narration": "טקסט קריינות מלא ומוכן להקראה עבור הסצנה",
-      "visualPrompt": "תיאור ויזואלי מפורט ליצירת מדיה/וידאו עבור הסצנה",
+      "visualPrompt": "English-only concise media search prompt with concrete product/category, setting, mood, and camera subject",
       "durationSeconds": 8
     }
   ]
@@ -166,7 +166,8 @@ ${sourceContext.rawInput}
 
 דרישות איכות:
 - narration חייב להיות טבעי, שיווקי וברור.
-- visualPrompt חייב לתאר צילום/אווירה/אובייקטים/טקסט על המסך.
+- visualPrompt חייב להיות באנגלית בלבד, ממוקד לחיפוש מדיה ב-Pexels, ולא כללי. דוגמה: "compact kitchen gadget close up modern home cooking".
+- אל תכתוב ב-visualPrompt מילים כלליות בלבד כמו promotional video, product shot, scene, background.
 - אין להשתמש במשפטים כלליים כמו "Meet..." אם אינם מתאימים לשפה ולמוצר.
 - אם הקלט בעברית, כתוב את הקריינות בעברית.
 `.trim();

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
@@ -6,7 +7,11 @@ import { nanoid } from "nanoid";
 import type { Scene } from "@prisma/client";
 import { localUrlForRender } from "../storage.js";
 
-if (ffmpegPath) {
+const systemFfmpegPath = "/usr/bin/ffmpeg";
+
+if (existsSync(systemFfmpegPath)) {
+  ffmpeg.setFfmpegPath(systemFfmpegPath);
+} else if (ffmpegPath) {
   ffmpeg.setFfmpegPath(ffmpegPath as unknown as string);
 }
 

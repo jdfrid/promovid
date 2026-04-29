@@ -20,8 +20,13 @@ export async function collectSceneAssets(scene: Scene, providers: ProviderByType
 }
 
 async function findMedia(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"]) {
+  const query = buildPexelsQuery(scene);
   for (const provider of providers) {
-    log.push({ step: "media_provider_attempt", message: "מחפש מדיה לסצנה", metadata: { provider: provider.provider, sceneId: scene.id } });
+    log.push({
+      step: "media_provider_attempt",
+      message: "מחפש מדיה לסצנה לפי שאילתה ממוקדת",
+      metadata: { provider: provider.provider, sceneId: scene.id, query }
+    });
 
     if (provider.provider.toLowerCase().includes("pexels") && provider.encryptedKey) {
       const apiKey = safeDecryptProviderKey(provider.encryptedKey, provider.provider, log);
@@ -29,9 +34,14 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
         continue;
       }
 
-      const result = await searchPexels(scene.visualPrompt || scene.narration, apiKey);
+      if (!query) {
+        log.push({ step: "media_query_missing", message: "לא נמצאה שאילתת מדיה מספיק ממוקדת לסצנה", metadata: { sceneId: scene.id } });
+        continue;
+      }
+
+      const result = await searchPexels(query, apiKey);
       if (result) {
-        log.push({ step: "media_provider_success", message: "נמצאה מדיה מתאימה", metadata: { provider: provider.provider, url: result } });
+        log.push({ step: "media_provider_success", message: "נמצאה מדיה מתאימה", metadata: { provider: provider.provider, query, url: result } });
         return result;
       }
     }
@@ -42,6 +52,45 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
   log.push({ step: "media_fallback", message: "לא נמצאה מדיה חיצונית, משתמש ברקע גרפי" });
   return undefined;
 }
+
+function buildPexelsQuery(scene: Scene) {
+  const source = `${scene.title} ${scene.visualPrompt} ${scene.narration}`;
+  const cleaned = source
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/\s+/)
+    .map((word) => word.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((word) => word.length > 2)
+    .filter((word) => !mediaStopWords.has(word));
+
+  const englishWords = cleaned.filter((word) => /^[a-z0-9-]+$/.test(word));
+  const selected = (englishWords.length >= 2 ? englishWords : cleaned).slice(0, 6);
+  return selected.join(" ");
+}
+
+const mediaStopWords = new Set([
+  "scene",
+  "video",
+  "shot",
+  "visual",
+  "prompt",
+  "advertising",
+  "advertisement",
+  "promotional",
+  "product",
+  "with",
+  "the",
+  "and",
+  "for",
+  "this",
+  "that",
+  "you",
+  "your",
+  "ready",
+  "text",
+  "screen",
+  "background"
+]);
 
 function safeDecryptProviderKey(encryptedKey: string, provider: string, log: SceneAssets["log"]) {
   try {
