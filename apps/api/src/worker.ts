@@ -172,4 +172,33 @@ worker.on("failed", async (job, error) => {
   });
 });
 
+let isShuttingDown = false;
+
+async function shutdown(signal: string) {
+  if (isShuttingDown) {
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log(`AdBot render worker received ${signal}, shutting down gracefully`);
+
+  try {
+    await worker.close();
+    await redisConnection.quit();
+    await prisma.$disconnect();
+    process.exit(0);
+  } catch (error) {
+    console.error("AdBot render worker shutdown failed", error);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
 console.log("AdBot render worker is running");
