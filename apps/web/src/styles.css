@@ -389,6 +389,8 @@ textarea {
   display: grid;
   gap: 10px;
   margin-top: 10px;
+  max-height: 220px;
+  overflow: auto;
 }
 
 .provider-message-list article {

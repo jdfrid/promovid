@@ -284,7 +284,6 @@ function CreateVideo() {
         <h2>יצירת סרטון</h2>
       </div>
       <div className="steps">{steps.map((step) => <span key={step}>{step}</span>)}</div>
-      <CurrentOperationPanel status={currentStatus} />
       <div className="two-col">
         <div className="panel">
           <label>כותרת הסרטון<input value={form.title} onChange={(event) => updateForm("title", event.target.value)} /></label>
@@ -337,6 +336,7 @@ function CreateVideo() {
           </button>}
         </div>
       </div>
+      <CurrentOperationPanel status={currentStatus} />
       {project && (
         <div className="panel">
           <div className="log-header">
