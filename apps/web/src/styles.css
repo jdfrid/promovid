@@ -43,6 +43,15 @@ a {
   color: #b8b8ff;
 }
 
+.link-button {
+  border: 0;
+  background: transparent;
+  color: #b8b8ff;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 280px 1fr;

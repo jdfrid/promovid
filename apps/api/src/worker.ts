@@ -161,6 +161,10 @@ worker.on("failed", async (job, error) => {
       progress: 100
     }
   });
+  await prisma.project.update({
+    where: { id: job.data.projectId },
+    data: { status: "FAILED" }
+  });
   await prisma.auditLog.create({
     data: {
       tenantId: job.data.tenantId,

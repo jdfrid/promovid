@@ -63,6 +63,12 @@ function loadCreateForm(): CreateForm {
 
 function App() {
   const [section, setSection] = useState<Section>("dashboard");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+
+  function openProject(projectId: string) {
+    setSelectedProjectId(projectId);
+    setSection("create");
+  }
 
   return (
     <div className="shell">
@@ -73,14 +79,17 @@ function App() {
         </div>
         <nav>
           <button className={section === "dashboard" ? "active" : ""} onClick={() => setSection("dashboard")}>Dashboard</button>
-          <button className={section === "create" ? "active" : ""} onClick={() => setSection("create")}>יצירה</button>
+          <button className={section === "create" ? "active" : ""} onClick={() => {
+            setSelectedProjectId(undefined);
+            setSection("create");
+          }}>יצירה</button>
           <button className={section === "assets" ? "active" : ""} onClick={() => setSection("assets")}>מאגר חומרים</button>
           <button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>הגדרות</button>
         </nav>
       </aside>
       <main>
-        {section === "dashboard" && <Dashboard />}
-        {section === "create" && <CreateVideo />}
+        {section === "dashboard" && <Dashboard onOpenProject={openProject} />}
+        {section === "create" && <CreateVideo selectedProjectId={selectedProjectId} />}
         {section === "assets" && <Assets />}
         {section === "settings" && <Settings />}
       </main>
@@ -88,7 +97,7 @@ function App() {
   );
 }
 
-function Dashboard() {
+function Dashboard({ onOpenProject }: { onOpenProject: (projectId: string) => void }) {
   const [dashboard, setDashboard] = useState<{ stats: Record<string, number>; recentJobs: RenderJob[] }>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadError, setLoadError] = useState("");
@@ -132,7 +141,11 @@ function Dashboard() {
           <tbody>
             {dashboard?.recentJobs.map((job) => (
               <tr key={job.id}>
-                <td>{job.project?.title}</td>
+                <td>
+                  {job.project ? (
+                    <button className="link-button" onClick={() => onOpenProject(job.project!.id)}>{job.project.title}</button>
+                  ) : "—"}
+                </td>
                 <td><Badge value={job.status} /></td>
                 <td>{job.stage}</td>
                 <td>{job.progress}%</td>
@@ -150,6 +163,7 @@ function Dashboard() {
               <strong>{project.title}</strong>
               <span>{project.duration} שניות · {project.aspectRatio}</span>
               <Badge value={project.status} />
+              <button className="secondary" onClick={() => onOpenProject(project.id)}>פתיחת פרויקט</button>
             </article>
           ))}
         </div>
@@ -158,7 +172,7 @@ function Dashboard() {
   );
 }
 
-function CreateVideo() {
+function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
   const [project, setProject] = useState<Project>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -179,6 +193,14 @@ function CreateVideo() {
   useEffect(() => {
     localStorage.setItem("promovid:create-logs", JSON.stringify(actionLogs.slice(0, 80)));
   }, [actionLogs]);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    void loadProject(selectedProjectId);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (!project || project.status !== "RENDERING") {
@@ -263,6 +285,32 @@ function CreateVideo() {
       setProject(updated);
     }
     setRenderLogs(logs);
+  }
+
+  async function loadProject(projectId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const [loadedProject, logs] = await Promise.all([
+        apiGet<Project>(`/projects/${projectId}`),
+        apiGet<AuditLog[]>(`/projects/${projectId}/logs`)
+      ]);
+      setProject(loadedProject);
+      setRenderLogs(logs);
+      setForm({
+        ...defaultCreateForm,
+        title: loadedProject.title,
+        sourceText: loadedProject.sourceText,
+        mode: loadedProject.mode,
+        duration: loadedProject.duration,
+        aspectRatio: loadedProject.aspectRatio
+      });
+      addLog("project_opened_from_dashboard", "פרויקט נטען מה-Dashboard", { projectId });
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "טעינת הפרויקט נכשלה");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const latestRenderJob = project?.renderJobs
