@@ -53,6 +53,7 @@ services:
   - type: redis
     name: promovid-redis
     plan: starter
+    maxmemoryPolicy: noeviction
     ipAllowList: []
 
 databases:
