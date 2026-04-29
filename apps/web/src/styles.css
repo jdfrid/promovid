@@ -358,6 +358,61 @@ textarea {
   text-align: left;
 }
 
+.current-operation {
+  margin-bottom: 20px;
+}
+
+.operation-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: #aeb5d9;
+  margin: 12px 0;
+}
+
+.progress-track {
+  height: 12px;
+  border-radius: 999px;
+  background: #111421;
+  border: 1px solid #323957;
+  overflow: hidden;
+}
+
+.progress-track div {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6d5dfc, #18c2ff);
+  transition: width 0.2s ease;
+}
+
+.provider-message-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.provider-message-list article {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(17, 20, 33, 0.72);
+  padding: 12px 14px;
+}
+
+.provider-message-list span {
+  color: #aeb5d9;
+  font-size: 0.84rem;
+}
+
+.provider-message-list code {
+  direction: ltr;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #9ea6ff;
+}
+
 .scene {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;

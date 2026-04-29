@@ -18,6 +18,7 @@ export interface RenderJob {
   progress: number;
   outputUrl?: string | null;
   error?: string | null;
+  createdAt?: string;
   updatedAt: string;
   project?: Project;
 }

@@ -265,6 +265,16 @@ function CreateVideo() {
     setRenderLogs(logs);
   }
 
+  const latestRenderJob = project?.renderJobs
+    ?.slice()
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+  const currentStatus = buildCurrentStatus({
+    busy,
+    project,
+    latestRenderJob,
+    actionLogs,
+    renderLogs
+  });
   const steps = ["תסריט", "מדיה", "קול", "הגדרות", "יצירה"];
 
   return (
@@ -274,6 +284,7 @@ function CreateVideo() {
         <h2>יצירת סרטון</h2>
       </div>
       <div className="steps">{steps.map((step) => <span key={step}>{step}</span>)}</div>
+      <CurrentOperationPanel status={currentStatus} />
       <div className="two-col">
         <div className="panel">
           <label>כותרת הסרטון<input value={form.title} onChange={(event) => updateForm("title", event.target.value)} /></label>
@@ -385,6 +396,143 @@ function CreateVideo() {
       )}
     </section>
   );
+}
+
+interface CurrentOperationStatus {
+  stageLabel: string;
+  startedAt?: string;
+  progress: number;
+  status: string;
+  providerMessages: Array<{ at: string; message: string; step: string; metadata?: Record<string, unknown> }>;
+}
+
+function CurrentOperationPanel({ status }: { status: CurrentOperationStatus }) {
+  return (
+    <div className="panel current-operation">
+      <div className="log-header">
+        <div>
+          <p className="eyebrow">Current Operation</p>
+          <h3>{status.stageLabel}</h3>
+        </div>
+        <Badge value={status.status} />
+      </div>
+      <div className="operation-meta">
+        <span>התחיל: {status.startedAt ? new Date(status.startedAt).toLocaleString("he-IL") : "טרם התחיל"}</span>
+        <span>{status.progress}% בוצע</span>
+      </div>
+      <div className="progress-track">
+        <div style={{ width: `${Math.min(100, Math.max(0, status.progress))}%` }} />
+      </div>
+      <h4>הודעות ספקים ושלבים</h4>
+      {status.providerMessages.length === 0 && <p className="muted">עדיין אין הודעות מספקים או שלבי עיבוד.</p>}
+      <div className="provider-message-list">
+        {status.providerMessages.map((message, index) => (
+          <article key={`${message.at}-${message.step}-${index}`}>
+            <strong>{message.message}</strong>
+            <span>{new Date(message.at).toLocaleTimeString("he-IL")} · {message.step}</span>
+            {message.metadata && <code>{JSON.stringify(message.metadata)}</code>}
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function buildCurrentStatus(input: {
+  busy: boolean;
+  project?: Project;
+  latestRenderJob?: RenderJob;
+  actionLogs: OperationLog[];
+  renderLogs: AuditLog[];
+}): CurrentOperationStatus {
+  const providerMessages = [
+    ...input.renderLogs.map((log) => ({
+      at: log.createdAt,
+      step: log.action,
+      message: String(log.metadata?.message ?? log.action),
+      metadata: log.metadata
+    })),
+    ...input.actionLogs.map((log) => ({
+      at: log.at,
+      step: log.step,
+      message: log.message,
+      metadata: log.metadata
+    }))
+  ]
+    .filter((log) => shouldShowAsProviderMessage(log.step))
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    .slice(0, 8);
+
+  if (input.latestRenderJob) {
+    return {
+      stageLabel: renderStageLabel(input.latestRenderJob.stage),
+      startedAt: input.latestRenderJob.createdAt ?? input.renderLogs.at(-1)?.createdAt ?? input.latestRenderJob.updatedAt,
+      progress: input.latestRenderJob.progress,
+      status: input.latestRenderJob.status,
+      providerMessages
+    };
+  }
+
+  if (input.busy) {
+    const firstBusyLog = [...input.actionLogs].reverse().find((log) => log.step.includes("create_script"));
+    return {
+      stageLabel: "יצירת תסריט",
+      startedAt: firstBusyLog?.at,
+      progress: 20,
+      status: "RUNNING",
+      providerMessages
+    };
+  }
+
+  if (input.project?.status === "SCRIPT_READY") {
+    return {
+      stageLabel: "התסריט מוכן",
+      startedAt: input.actionLogs.at(-1)?.at,
+      progress: 35,
+      status: "SCRIPT_READY",
+      providerMessages
+    };
+  }
+
+  return {
+    stageLabel: "ממתין להתחלה",
+    progress: 0,
+    status: "IDLE",
+    providerMessages
+  };
+}
+
+function shouldShowAsProviderMessage(step: string) {
+  return [
+    "gemini",
+    "source_url",
+    "script_provider",
+    "media_provider",
+    "voice_provider",
+    "music_provider",
+    "scene_assets",
+    "scene_render",
+    "final_render",
+    "render_job"
+  ].some((prefix) => step.includes(prefix));
+}
+
+function renderStageLabel(stage: string) {
+  if (stage.startsWith("scene_") && stage.endsWith("_assets")) {
+    return `שליפת מדיה ומרכיבים · ${stage.replace("scene_", "סצנה ").replace("_assets", "")}`;
+  }
+  if (stage.startsWith("scene_") && stage.endsWith("_render")) {
+    return `רינדור קליפ · ${stage.replace("scene_", "סצנה ").replace("_render", "")}`;
+  }
+
+  const labels: Record<string, string> = {
+    collect_assets: "שליפת מדיה, קול ומוסיקה",
+    render: "רינדור סרטון",
+    merge_final_video: "איחוד הסרטון הסופי",
+    completed: "הושלם"
+  };
+
+  return labels[stage] ?? stage;
 }
 
 function Assets() {
