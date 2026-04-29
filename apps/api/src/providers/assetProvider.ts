@@ -39,7 +39,7 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
         continue;
       }
 
-      const result = await searchPexels(query, apiKey);
+      const result = await searchPexels(query, apiKey, log);
       if (result) {
         log.push({ step: "media_provider_success", message: "נמצאה מדיה מתאימה", metadata: { provider: provider.provider, query, url: result } });
         return result;
@@ -125,27 +125,42 @@ async function findMusic(scene: Scene, providers: ProviderCredential[], log: Sce
   return undefined;
 }
 
-async function searchPexels(query: string, apiKey: string) {
+async function searchPexels(query: string, apiKey: string, log: SceneAssets["log"]) {
   const url = new URL("https://api.pexels.com/videos/search");
   url.searchParams.set("query", query);
   url.searchParams.set("orientation", "portrait");
   url.searchParams.set("per_page", "1");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: apiKey
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Authorization: apiKey
+      }
+    });
+
+    if (!response.ok) {
+      log.push({ step: "media_provider_error", message: "Pexels החזיר שגיאה", metadata: { status: response.status, query } });
+      return undefined;
     }
-  });
 
-  if (!response.ok) {
+    const payload = (await response.json()) as {
+      videos?: Array<{ video_files?: Array<{ link?: string; quality?: string; width?: number }> }>;
+    };
+    const files = payload.videos?.[0]?.video_files ?? [];
+    return files
+      .filter((file) => file.link)
+      .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.link;
+  } catch (error) {
+    log.push({
+      step: "media_provider_error",
+      message: "קריאת Pexels נכשלה או עברה timeout",
+      metadata: { query, error: error instanceof Error ? error.message : "unknown error" }
+    });
     return undefined;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const payload = (await response.json()) as {
-    videos?: Array<{ video_files?: Array<{ link?: string; quality?: string; width?: number }> }>;
-  };
-  const files = payload.videos?.[0]?.video_files ?? [];
-  return files
-    .filter((file) => file.link)
-    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.link;
 }

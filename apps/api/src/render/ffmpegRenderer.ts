@@ -42,7 +42,7 @@ export async function renderVideo(input: RenderInput) {
   const body = escapeDrawText(input.scenes[0]?.narration ?? "AdBot promotional video");
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg()
+    const command = ffmpeg()
       .input(`color=c=#151827:s=${width}x${height}:d=${duration}`)
       .inputFormat("lavfi")
       .videoFilters([
@@ -52,9 +52,10 @@ export async function renderVideo(input: RenderInput) {
       ])
       .outputOptions(["-pix_fmt yuv420p", "-movflags +faststart", "-r 30"])
       .output(outputPath)
+      .duration(duration)
       .on("end", () => resolve())
       .on("error", reject)
-      .run();
+    runWithTimeout(command, 180, reject);
   });
 
   return {
@@ -89,10 +90,11 @@ export async function renderSceneClip(input: {
       ])
       .outputOptions(["-pix_fmt yuv420p", "-movflags +faststart", "-r 30"])
       .output(outputPath)
+      .duration(input.scene.durationSeconds)
       .on("end", () => resolve())
       .on("error", reject);
 
-    command.run();
+    runWithTimeout(command, 90, reject);
   });
 
   return {
@@ -113,4 +115,16 @@ function dimensionsFor(aspectRatio: string) {
 
 function escapeDrawText(value: string) {
   return value.replace(/[':\\\\]/g, "\\\\$&").replace(/\n/g, " ");
+}
+
+function runWithTimeout(command: ffmpeg.FfmpegCommand, timeoutSeconds: number, reject: (reason?: unknown) => void) {
+  const timeout = setTimeout(() => {
+    command.kill("SIGKILL");
+    reject(new Error(`FFmpeg timed out after ${timeoutSeconds} seconds`));
+  }, timeoutSeconds * 1000);
+
+  command
+    .on("end", () => clearTimeout(timeout))
+    .on("error", () => clearTimeout(timeout))
+    .run();
 }

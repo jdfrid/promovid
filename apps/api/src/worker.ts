@@ -139,7 +139,13 @@ const worker = new Worker<RenderJobPayload>(
     ]);
     await log("render_job_completed", "כל הסרטונים מוכנים להורדה", { outputUrl: output.outputUrl });
   },
-  { connection: redisConnection, concurrency: 2 }
+  {
+    connection: redisConnection,
+    concurrency: 1,
+    lockDuration: 10 * 60 * 1000,
+    stalledInterval: 2 * 60 * 1000,
+    maxStalledCount: 3
+  }
 );
 
 worker.on("failed", async (job, error) => {
