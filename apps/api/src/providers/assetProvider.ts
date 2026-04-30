@@ -39,10 +39,22 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
         continue;
       }
 
-      const result = await searchPexels(query, apiKey, log);
+      const result = await searchPexels(query, apiKey, scene.durationSeconds, log);
       if (result) {
-        log.push({ step: "media_provider_success", message: "נמצאה מדיה מתאימה", metadata: { provider: provider.provider, query, url: result } });
-        return result;
+        log.push({
+          step: "media_provider_success",
+          message: "נמצאה מדיה מתאימה לפי אורך ומשקל",
+          metadata: {
+            provider: provider.provider,
+            query,
+            url: result.link,
+            duration: result.duration,
+            width: result.width,
+            height: result.height,
+            fileSize: result.fileSize
+          }
+        });
+        return result.link;
       }
     }
 
@@ -125,11 +137,11 @@ async function findMusic(scene: Scene, providers: ProviderCredential[], log: Sce
   return undefined;
 }
 
-async function searchPexels(query: string, apiKey: string, log: SceneAssets["log"]) {
+async function searchPexels(query: string, apiKey: string, sceneDuration: number, log: SceneAssets["log"]) {
   const url = new URL("https://api.pexels.com/videos/search");
   url.searchParams.set("query", query);
   url.searchParams.set("orientation", "portrait");
-  url.searchParams.set("per_page", "1");
+  url.searchParams.set("per_page", "10");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
 
@@ -146,13 +158,40 @@ async function searchPexels(query: string, apiKey: string, log: SceneAssets["log
       return undefined;
     }
 
-    const payload = (await response.json()) as {
-      videos?: Array<{ video_files?: Array<{ link?: string; quality?: string; width?: number }> }>;
-    };
-    const files = payload.videos?.[0]?.video_files ?? [];
-    return files
-      .filter((file) => file.link)
-      .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0]?.link;
+    const payload = (await response.json()) as PexelsSearchResponse;
+    const maxDuration = Math.min(8, Math.max(7, sceneDuration));
+    const candidates = (payload.videos ?? [])
+      .filter((video) => video.duration > 0 && video.duration <= maxDuration)
+      .flatMap((video) => {
+        return (video.video_files ?? [])
+          .filter((file) => file.link)
+          .map((file) => ({
+            link: file.link,
+            duration: video.duration,
+            width: file.width ?? 0,
+            height: file.height ?? 0,
+            fileSize: file.file_size ?? Number.MAX_SAFE_INTEGER
+          }));
+      })
+      .filter((file) => file.fileSize <= 15 * 1024 * 1024)
+      .sort((a, b) => {
+        const sizeDiff = a.fileSize - b.fileSize;
+        if (sizeDiff !== 0) {
+          return sizeDiff;
+        }
+        return Math.abs(a.duration - sceneDuration) - Math.abs(b.duration - sceneDuration);
+      });
+
+    if (candidates.length === 0) {
+      log.push({
+        step: "media_provider_no_match",
+        message: "Pexels לא החזיר סרטון שעומד במגבלות אורך/משקל",
+        metadata: { query, maxDuration, maxFileSizeMb: 15, returnedVideos: payload.videos?.length ?? 0 }
+      });
+      return undefined;
+    }
+
+    return candidates[0];
   } catch (error) {
     log.push({
       step: "media_provider_error",
@@ -163,4 +202,16 @@ async function searchPexels(query: string, apiKey: string, log: SceneAssets["log
   } finally {
     clearTimeout(timeout);
   }
+}
+
+interface PexelsSearchResponse {
+  videos?: Array<{
+    duration: number;
+    video_files?: Array<{
+      link?: string;
+      width?: number;
+      height?: number;
+      file_size?: number;
+    }>;
+  }>;
 }
