@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import type { RenderJobPayload } from "@promovid/shared";
 import { prisma } from "./db.js";
 import { redisConnection } from "./queue.js";
-import { renderSceneClip, renderVideo } from "./render/ffmpegRenderer.js";
+import { mergeSceneClips, renderSceneClip } from "./render/ffmpegRenderer.js";
 import { collectSceneAssets } from "./providers/assetProvider.js";
 
 type WorkerLog = { at: string; step: string; message: string; metadata?: Record<string, unknown> };
@@ -65,6 +65,7 @@ const worker = new Worker<RenderJobPayload>(
     });
 
     const orderedScenes = [...project.scenes].sort((a, b) => a.order - b.order);
+    const renderedClipPaths: string[] = [];
     for (const [index, scene] of orderedScenes.entries()) {
       const baseProgress = 10 + Math.round((index / Math.max(orderedScenes.length, 1)) * 70);
       await prisma.renderJob.update({
@@ -87,8 +88,10 @@ const worker = new Worker<RenderJobPayload>(
         projectId: project.id,
         scene,
         aspectRatio: project.aspectRatio,
-        mediaUrl: assets.mediaUrl
+        mediaUrl: assets.mediaUrl,
+        onLog: log
       });
+      renderedClipPaths.push(clip.outputPath);
 
       await prisma.scene.update({
         where: { id: scene.id },
@@ -113,11 +116,10 @@ const worker = new Worker<RenderJobPayload>(
     });
     await log("final_render_started", "מרנדר סרטון סופי מאוחד", { sceneCount: orderedScenes.length });
 
-    const output = await renderVideo({
+    const output = await mergeSceneClips({
       projectId: project.id,
-      title: project.title,
-      aspectRatio: project.aspectRatio,
-      scenes: orderedScenes
+      clipPaths: renderedClipPaths,
+      onLog: log
     });
 
     await job.updateProgress(90);

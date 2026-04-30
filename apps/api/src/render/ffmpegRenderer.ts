@@ -20,7 +20,10 @@ interface RenderInput {
   title: string;
   aspectRatio: string;
   scenes: Scene[];
+  onLog?: RenderLogger;
 }
+
+type RenderLogger = (step: string, message: string, metadata?: Record<string, unknown>) => Promise<void> | void;
 
 export async function renderVideo(input: RenderInput) {
   const outputDirectory = path.resolve("./renders");
@@ -57,7 +60,7 @@ export async function renderVideo(input: RenderInput) {
       .duration(duration)
       .on("end", () => resolve())
       .on("error", reject)
-    runWithTimeout(command, 180, reject);
+    runWithTimeout(command, 180, reject, input.onLog);
   });
 
   return {
@@ -72,6 +75,7 @@ export async function renderSceneClip(input: {
   scene: Scene;
   aspectRatio: string;
   mediaUrl?: string;
+  onLog?: RenderLogger;
 }) {
   const outputDirectory = path.resolve("./renders");
   await mkdir(outputDirectory, { recursive: true });
@@ -98,7 +102,46 @@ export async function renderSceneClip(input: {
       .on("end", () => resolve())
       .on("error", reject);
 
-    runWithTimeout(command, 90, reject);
+    runWithTimeout(command, 45, reject, input.onLog);
+  });
+
+  return {
+    outputPath,
+    outputUrl: localUrlForRender(filename)
+  };
+}
+
+export async function mergeSceneClips(input: {
+  projectId: string;
+  clipPaths: string[];
+  onLog?: RenderLogger;
+}) {
+  const outputDirectory = path.resolve("./renders");
+  await mkdir(outputDirectory, { recursive: true });
+  const filename = `${input.projectId}-final-${nanoid(8)}.mp4`;
+  const outputPath = path.join(outputDirectory, filename);
+  const concatListPath = path.join(outputDirectory, `${input.projectId}-concat-${nanoid(8)}.txt`);
+
+  if (input.clipPaths.length === 0) {
+    throw new Error("Cannot merge final video because no scene clips were rendered.");
+  }
+
+  await writeFile(
+    concatListPath,
+    input.clipPaths.map((clipPath) => `file '${escapeConcatPath(clipPath)}'`).join("\n"),
+    "utf8"
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const command = ffmpeg()
+      .input(concatListPath)
+      .inputOptions(["-f concat", "-safe 0"])
+      .outputOptions(["-c copy", "-movflags +faststart"])
+      .output(outputPath)
+      .on("end", () => resolve())
+      .on("error", reject);
+
+    runWithTimeout(command, 90, reject, input.onLog);
   });
 
   return {
@@ -128,14 +171,52 @@ function escapeFilterPath(value: string) {
   return value.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
-function runWithTimeout(command: ffmpeg.FfmpegCommand, timeoutSeconds: number, reject: (reason?: unknown) => void) {
+function escapeConcatPath(value: string) {
+  return value.replace(/\\/g, "/").replace(/'/g, "'\\''");
+}
+
+function runWithTimeout(
+  command: ffmpeg.FfmpegCommand,
+  timeoutSeconds: number,
+  reject: (reason?: unknown) => void,
+  onLog?: RenderLogger
+) {
+  let lastProgressAt = Date.now();
   const timeout = setTimeout(() => {
+    void onLog?.("ffmpeg_timeout", "FFmpeg עבר timeout ונעצר", { timeoutSeconds });
     command.kill("SIGKILL");
     reject(new Error(`FFmpeg timed out after ${timeoutSeconds} seconds`));
   }, timeoutSeconds * 1000);
 
   command
-    .on("end", () => clearTimeout(timeout))
-    .on("error", () => clearTimeout(timeout))
+    .on("start", (commandLine) => {
+      void onLog?.("ffmpeg_start", "FFmpeg התחיל לרנדר", { timeoutSeconds });
+      void onLog?.("ffmpeg_command", "פקודת FFmpeg הופעלה", { commandLine: commandLine.slice(0, 500) });
+    })
+    .on("progress", (progress) => {
+      const now = Date.now();
+      if (now - lastProgressAt > 5000) {
+        lastProgressAt = now;
+        void onLog?.("ffmpeg_progress", "FFmpeg מתקדם", {
+          frames: progress.frames,
+          currentFps: progress.currentFps,
+          timemark: progress.timemark,
+          percent: progress.percent
+        });
+      }
+    })
+    .on("stderr", (line) => {
+      if (/error|failed|invalid|conversion/i.test(line)) {
+        void onLog?.("ffmpeg_stderr", "FFmpeg דיווח אזהרה/שגיאה", { line: line.slice(0, 500) });
+      }
+    })
+    .on("end", () => {
+      clearTimeout(timeout);
+      void onLog?.("ffmpeg_done", "FFmpeg סיים בהצלחה");
+    })
+    .on("error", (error) => {
+      clearTimeout(timeout);
+      void onLog?.("ffmpeg_error", "FFmpeg נכשל", { error: error.message });
+    })
     .run();
 }
