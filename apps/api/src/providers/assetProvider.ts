@@ -10,17 +10,21 @@ export interface SceneAssets {
 
 type ProviderByType = Partial<Record<"MEDIA" | "VOICE" | "MUSIC", ProviderCredential[]>>;
 
-export async function collectSceneAssets(scene: Scene, providers: ProviderByType): Promise<SceneAssets> {
+export async function collectSceneAssets(
+  scene: Scene,
+  providers: ProviderByType,
+  prompts?: { backgroundVideoPrompt?: string | null; musicPrompt?: string | null }
+): Promise<SceneAssets> {
   const log: SceneAssets["log"] = [];
-  const mediaUrl = await findMedia(scene, providers.MEDIA ?? [], log);
+  const mediaUrl = await findMedia(scene, providers.MEDIA ?? [], log, prompts?.backgroundVideoPrompt);
   const voiceUrl = await createVoice(scene, providers.VOICE ?? [], log);
-  const musicUrl = await findMusic(scene, providers.MUSIC ?? [], log);
+  const musicUrl = await findMusic(scene, providers.MUSIC ?? [], log, prompts?.musicPrompt);
 
   return { mediaUrl, voiceUrl, musicUrl, log };
 }
 
-async function findMedia(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"]) {
-  const query = buildPexelsQuery(scene);
+async function findMedia(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"], backgroundVideoPrompt?: string | null) {
+  const query = buildPexelsQuery(scene, backgroundVideoPrompt);
   for (const provider of providers) {
     log.push({
       step: "media_provider_attempt",
@@ -65,8 +69,8 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
   return undefined;
 }
 
-function buildPexelsQuery(scene: Scene) {
-  const source = scene.visualPrompt || `${scene.title} ${scene.narration}`;
+function buildPexelsQuery(scene: Scene, backgroundVideoPrompt?: string | null) {
+  const source = backgroundVideoPrompt || scene.visualPrompt || `${scene.title} ${scene.narration}`;
   const cleaned = source
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
@@ -142,9 +146,9 @@ async function createVoice(scene: Scene, providers: ProviderCredential[], log: S
   return undefined;
 }
 
-async function findMusic(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"]) {
+async function findMusic(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"], musicPrompt?: string | null) {
   for (const provider of providers) {
-    log.push({ step: "music_provider_attempt", message: "מנסה לאתר מוסיקת רקע לסצנה", metadata: { provider: provider.provider, sceneId: scene.id } });
+    log.push({ step: "music_provider_attempt", message: "מנסה לאתר מוסיקת רקע לסצנה", metadata: { provider: provider.provider, sceneId: scene.id, musicPrompt } });
     log.push({ step: "music_provider_deferred", message: "חיבור מוסיקה חיצונית יופעל בשלב הבא; הקליפ יורנדר ללא מוסיקה", metadata: { provider: provider.provider } });
   }
   return undefined;

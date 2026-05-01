@@ -88,6 +88,8 @@ model Project {
   sourceText     String
   targetAudience String?
   style          String?
+  backgroundVideoPrompt String?
+  musicPrompt    String?
   duration       Int           @default(30)
   aspectRatio    String        @default("9:16")
   status         ProjectStatus @default(DRAFT)

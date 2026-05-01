@@ -30,6 +30,8 @@ export interface Project {
   mode: string;
   duration: number;
   aspectRatio: string;
+  backgroundVideoPrompt?: string | null;
+  musicPrompt?: string | null;
   status: string;
   scenes: Scene[];
   renderJobs?: RenderJob[];

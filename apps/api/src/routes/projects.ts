@@ -126,9 +126,9 @@ export async function projectRoutes(app: FastifyInstance) {
       }))
     });
 
-    let scenes: Awaited<ReturnType<typeof generateScript>>;
+    let scriptResult: Awaited<ReturnType<typeof generateScript>>;
     try {
-      scenes = await generateScriptWithFailover(input, scriptProviders, logOperation);
+      scriptResult = await generateScriptWithFailover(input, scriptProviders, logOperation);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Script generation failed";
       logOperation("script_generation_failed", "יצירת התסריט נכשלה", { error: message });
@@ -136,7 +136,11 @@ export async function projectRoutes(app: FastifyInstance) {
       reply.code(500);
       return { error: message, operationLogs };
     }
-    logOperation("script_generation_complete", "יצירת התסריט הסתיימה", { sceneCount: scenes.length });
+    logOperation("script_generation_complete", "יצירת התסריט הסתיימה", {
+      sceneCount: scriptResult.scenes.length,
+      backgroundVideoPrompt: scriptResult.backgroundVideoPrompt,
+      musicPrompt: scriptResult.musicPrompt
+    });
 
     const project = await prisma.project.create({
       data: {
@@ -146,11 +150,13 @@ export async function projectRoutes(app: FastifyInstance) {
         mode: input.mode,
         targetAudience: input.targetAudience,
         style: input.style,
+        backgroundVideoPrompt: scriptResult.backgroundVideoPrompt,
+        musicPrompt: scriptResult.musicPrompt,
         duration: input.duration,
         aspectRatio: input.aspectRatio,
         status: "SCRIPT_READY",
         scenes: {
-          create: scenes.map((scene, index) => ({
+          create: scriptResult.scenes.map((scene, index) => ({
             ...scene,
             order: index
           }))
@@ -227,7 +233,9 @@ async function generateScriptWithFailover(
       });
       logOperation("script_provider_attempt_success", "ספק התסריט החזיר תוצאה תקינה", {
         provider: provider.provider,
-        sceneCount: scenes.length
+        sceneCount: scenes.scenes.length,
+        backgroundVideoPrompt: scenes.backgroundVideoPrompt,
+        musicPrompt: scenes.musicPrompt
       });
       return scenes;
     } catch (error) {

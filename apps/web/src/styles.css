@@ -435,6 +435,11 @@ textarea {
   color: #f7f7fb;
 }
 
+.prompt-card {
+  background: rgba(109, 93, 252, 0.12);
+  border-color: rgba(158, 166, 255, 0.28);
+}
+
 .scene-assets,
 .download-grid {
   display: flex;

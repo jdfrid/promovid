@@ -27,7 +27,13 @@ interface SourceContext {
 
 type OperationLogger = (...args: [string, string, Record<string, unknown>?]) => void;
 
-export async function generateScript(request: ScriptRequest): Promise<SceneInput[]> {
+export interface ScriptGenerationResult {
+  scenes: SceneInput[];
+  backgroundVideoPrompt?: string;
+  musicPrompt?: string;
+}
+
+export async function generateScript(request: ScriptRequest): Promise<ScriptGenerationResult> {
   const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
   if (request.provider) {
     if (!request.provider.apiKey) {
@@ -46,12 +52,16 @@ export async function generateScript(request: ScriptRequest): Promise<SceneInput
   const style = request.style || "modern, clear, conversion-oriented";
   const audience = request.targetAudience || "general audience";
 
-  return Array.from({ length: sceneCount }, (_, index) => ({
-    title: `Scene ${index + 1}`,
-    narration: buildNarration(cleanSource, index, sceneCount, style, audience),
-    visualPrompt: `Vertical promotional shot for "${cleanSource}", ${style}, scene ${index + 1}`,
-    durationSeconds: Math.round(request.duration / sceneCount)
-  }));
+  return {
+    backgroundVideoPrompt: `${cleanSource} ${style} lifestyle product background`,
+    musicPrompt: `${style} upbeat commercial background music for ${audience}`,
+    scenes: Array.from({ length: sceneCount }, (_, index) => ({
+      title: `Scene ${index + 1}`,
+      narration: buildNarration(cleanSource, index, sceneCount, style, audience),
+      visualPrompt: `Vertical promotional shot for "${cleanSource}", ${style}, scene ${index + 1}`,
+      durationSeconds: Math.round(request.duration / sceneCount)
+    }))
+  };
 }
 
 function buildNarration(source: string, index: number, total: number, style: string, audience: string) {
@@ -70,7 +80,7 @@ async function generateGeminiScript(
   request: ScriptRequest,
   provider: ScriptProviderSettings,
   sourceContext: SourceContext
-): Promise<SceneInput[]> {
+): Promise<ScriptGenerationResult> {
   const model = normalizeGeminiModel(readConfigValue(provider.config, "model") ?? "gemini-2.5-flash-lite");
   const prompt = buildGeminiPrompt(request, sourceContext);
   request.onLog?.("gemini_prompt_ready", "נבנה prompt מפורט עבור Gemini", {
@@ -115,9 +125,13 @@ async function generateGeminiScript(
   };
   const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
   request.onLog?.("gemini_response_received", "התקבלה תשובה מ-Gemini", { responseLength: text.length });
-  const scenes = normalizeScenes(parseSceneResponse(text), request.duration);
-  request.onLog?.("gemini_response_parsed", "תשובת Gemini פוענחה לסצנות", { sceneCount: scenes.length });
-  return scenes;
+  const result = normalizeScriptResponse(parseScriptResponse(text), request.duration);
+  request.onLog?.("gemini_response_parsed", "תשובת Gemini פוענחה לסצנות ולפרומפטים", {
+    sceneCount: result.scenes.length,
+    hasBackgroundVideoPrompt: Boolean(result.backgroundVideoPrompt),
+    hasMusicPrompt: Boolean(result.musicPrompt)
+  });
+  return result;
 }
 
 function buildGeminiPrompt(request: ScriptRequest, sourceContext: SourceContext) {
@@ -154,6 +168,8 @@ ${sourceContext.rawInput}
 
 החזר JSON בלבד, בלי Markdown ובלי הסברים, במבנה הבא:
 {
+  "backgroundVideoPrompt": "English-only concise description of the best overall background video for the full ad, focused on product/category, environment, subject, mood, camera style",
+  "musicPrompt": "English-only concise description of the best background music style for the ad, including mood, tempo, genre, energy",
   "scenes": [
     {
       "title": "שם קצר לסצנה",
@@ -165,6 +181,8 @@ ${sourceContext.rawInput}
 }
 
 דרישות איכות:
+- backgroundVideoPrompt חייב לתאר את סרטון הרקע הכללי המתאים לכל הפרסומת, ולא CTA או טקסט שיווקי.
+- musicPrompt חייב לתאר מוסיקת רקע מתאימה לפרסומת, לא טקסט קריינות.
 - narration חייב להיות טבעי, שיווקי וברור.
 - visualPrompt חייב להיות באנגלית בלבד, ממוקד לחיפוש מדיה ב-Pexels, ולא כללי. דוגמה: "compact kitchen gadget close up modern home cooking".
 - אל תכתוב ב-visualPrompt מילים כלליות בלבד כמו promotional video, product shot, scene, background.
@@ -253,24 +271,32 @@ function htmlToText(html: string) {
     .trim();
 }
 
-function parseSceneResponse(text: string): SceneInput[] {
+function parseScriptResponse(text: string): { scenes?: SceneInput[]; backgroundVideoPrompt?: string; musicPrompt?: string } | SceneInput[] {
   const cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
   const parsed = JSON.parse(cleaned) as { scenes?: SceneInput[] } | SceneInput[];
-  return Array.isArray(parsed) ? parsed : parsed.scenes ?? [];
+  return parsed;
 }
 
-function normalizeScenes(scenes: SceneInput[], totalDuration: number) {
+function normalizeScriptResponse(
+  parsed: { scenes?: SceneInput[]; backgroundVideoPrompt?: string; musicPrompt?: string } | SceneInput[],
+  totalDuration: number
+): ScriptGenerationResult {
+  const scenes = Array.isArray(parsed) ? parsed : parsed.scenes ?? [];
   if (scenes.length === 0) {
     throw new Error("Gemini returned no script scenes.");
   }
 
   const durations = distributeDurations(totalDuration, scenes.length);
-  return scenes.map((scene, index) => ({
-    title: scene.title || `Scene ${index + 1}`,
-    narration: scene.narration,
-    visualPrompt: scene.visualPrompt,
-    durationSeconds: durations[index] ?? clampDuration(Number(scene.durationSeconds) || 8)
-  }));
+  return {
+    backgroundVideoPrompt: Array.isArray(parsed) ? undefined : parsed.backgroundVideoPrompt,
+    musicPrompt: Array.isArray(parsed) ? undefined : parsed.musicPrompt,
+    scenes: scenes.map((scene, index) => ({
+      title: scene.title || `Scene ${index + 1}`,
+      narration: scene.narration,
+      visualPrompt: scene.visualPrompt,
+      durationSeconds: durations[index] ?? clampDuration(Number(scene.durationSeconds) || 8)
+    }))
+  };
 }
 
 function clampDuration(duration: number) {

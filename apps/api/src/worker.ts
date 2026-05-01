@@ -76,7 +76,10 @@ const worker = new Worker<RenderJobPayload>(
       });
       await log("scene_assets_started", "מתחיל איסוף מרכיבים לסצנה", { sceneId: scene.id, scene: index + 1 });
 
-      const assets = await collectSceneAssets(scene, providersByType);
+      const assets = await collectSceneAssets(scene, providersByType, {
+        backgroundVideoPrompt: project.backgroundVideoPrompt,
+        musicPrompt: project.musicPrompt
+      });
       for (const assetLog of assets.log) {
         await log(assetLog.step, assetLog.message, assetLog.metadata);
       }

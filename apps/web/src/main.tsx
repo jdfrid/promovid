@@ -366,6 +366,18 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         <div className="panel">
           <h3>תסריט וסצנות</h3>
           {!project && <p className="muted">לאחר יצירת התסריט יוצגו כאן סצנות של 7-8 שניות.</p>}
+          {project?.backgroundVideoPrompt && (
+            <article className="scene prompt-card">
+              <strong>סרטון רקע מומלץ</strong>
+              <p>{project.backgroundVideoPrompt}</p>
+            </article>
+          )}
+          {project?.musicPrompt && (
+            <article className="scene prompt-card">
+              <strong>מוסיקת רקע מומלצת</strong>
+              <p>{project.musicPrompt}</p>
+            </article>
+          )}
           {project?.scenes.map((scene) => (
             <article key={scene.id} className="scene">
               <strong>{scene.title}</strong>
