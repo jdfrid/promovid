@@ -86,13 +86,32 @@ const worker = new Worker<RenderJobPayload>(
         data: { progress: Math.min(baseProgress + 8, 85), stage: `scene_${index + 1}_render` }
       });
       await log("scene_render_started", "מרנדר קליפ MP4 לסצנה", { sceneId: scene.id, scene: index + 1 });
-      const clip = await renderSceneClip({
-        projectId: project.id,
-        scene,
-        aspectRatio: project.aspectRatio,
-        mediaUrl: assets.mediaUrl,
-        onLog: log
-      });
+      let clip;
+      try {
+        clip = await renderSceneClip({
+          projectId: project.id,
+          scene,
+          aspectRatio: project.aspectRatio,
+          mediaUrl: assets.mediaUrl,
+          onLog: log
+        });
+      } catch (error) {
+        if (!assets.mediaUrl) {
+          throw error;
+        }
+
+        await log("scene_media_render_failed", "רינדור עם מדיה נכשל, מנסה שוב עם רקע גרפי", {
+          sceneId: scene.id,
+          mediaUrl: assets.mediaUrl,
+          error: error instanceof Error ? error.message : "unknown render error"
+        });
+        clip = await renderSceneClip({
+          projectId: project.id,
+          scene,
+          aspectRatio: project.aspectRatio,
+          onLog: log
+        });
+      }
       renderedClipPaths.push(clip.outputPath);
       const clipFile = await storeRenderFile({
         tenantId: job.data.tenantId,

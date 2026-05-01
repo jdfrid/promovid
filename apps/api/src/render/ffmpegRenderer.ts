@@ -87,16 +87,38 @@ export async function renderSceneClip(input: {
   await writeFile(titlePath, normalizeOverlayText(input.scene.title, 80), "utf8");
   await writeFile(narrationPath, normalizeOverlayText(input.scene.narration, 180), "utf8");
 
+  const sceneFilters = [
+    input.mediaUrl ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : undefined,
+    `drawtext=textfile='${escapeFilterPath(titlePath)}':fontcolor=white:fontsize=${Math.round(width / 16)}:x=(w-text_w)/2:y=h*0.18`,
+    `drawtext=textfile='${escapeFilterPath(narrationPath)}':fontcolor=white:fontsize=${Math.round(width / 30)}:x=(w-text_w)/2:y=h*0.48:box=1:boxcolor=black@0.35:boxborderw=18`,
+    `drawtext=text='Scene ${input.scene.order + 1} / ${input.scene.durationSeconds}s':fontcolor=#b8b8ff:fontsize=${Math.round(width / 38)}:x=(w-text_w)/2:y=h*0.86`
+  ].filter(Boolean).join(",");
+
+  const mediaArgs = input.mediaUrl
+    ? [
+        "-stream_loop", "-1",
+        "-i", input.mediaUrl,
+        "-t", String(input.scene.durationSeconds),
+        "-vf", sceneFilters,
+        "-an"
+      ]
+    : [
+        "-f", "lavfi",
+        "-i", `color=c=#151827:s=${width}x${height}:d=${input.scene.durationSeconds}`,
+        "-t", String(input.scene.durationSeconds),
+        "-vf", sceneFilters
+      ];
+
+  if (input.mediaUrl) {
+    await input.onLog?.("scene_media_background_used", "משתמש במדיה שנבחרה כרקע לסצנה", {
+      sceneId: input.scene.id,
+      mediaUrl: input.mediaUrl
+    });
+  }
+
   await runFfmpeg(
     [
-      "-f", "lavfi",
-      "-i", `color=c=#151827:s=${width}x${height}:d=${input.scene.durationSeconds}`,
-      "-t", String(input.scene.durationSeconds),
-      "-vf", [
-        `drawtext=textfile='${escapeFilterPath(titlePath)}':fontcolor=white:fontsize=${Math.round(width / 16)}:x=(w-text_w)/2:y=h*0.18`,
-        `drawtext=textfile='${escapeFilterPath(narrationPath)}':fontcolor=white:fontsize=${Math.round(width / 30)}:x=(w-text_w)/2:y=h*0.48:box=1:boxcolor=black@0.35:boxborderw=18`,
-        `drawtext=text='Scene ${input.scene.order + 1} / ${input.scene.durationSeconds}s':fontcolor=#b8b8ff:fontsize=${Math.round(width / 38)}:x=(w-text_w)/2:y=h*0.86`
-      ].join(","),
+      ...mediaArgs,
       "-pix_fmt", "yuv420p",
       "-movflags", "+faststart",
       "-r", "24",
@@ -105,7 +127,7 @@ export async function renderSceneClip(input: {
       "-y",
       outputPath
     ],
-    35,
+    input.mediaUrl ? 60 : 35,
     input.onLog
   );
 
