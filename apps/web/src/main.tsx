@@ -669,7 +669,7 @@ function Settings() {
     temperature: 0.7
   });
   useEffect(() => {
-    void apiGet<Provider[]>("/providers").then(setProviders);
+    void apiGet<Provider[]>("/settings/services").then(setProviders);
   }, []);
 
   useEffect(() => {
@@ -680,7 +680,7 @@ function Settings() {
   const activeProviders = useMemo(() => providers.filter((provider) => provider.type === activeType), [activeType, providers]);
 
   function refreshProviders() {
-    return apiGet<Provider[]>("/providers").then(setProviders);
+    return apiGet<Provider[]>("/settings/services").then(setProviders);
   }
 
   function selectProvider(providerId: string) {
@@ -735,9 +735,9 @@ function Settings() {
       };
 
       if (selectedId === "new") {
-        await apiPost<Provider>("/providers", payload);
+        await apiPost<Provider>("/settings/services", payload);
       } else {
-        await apiPatch<Provider>(`/providers/${selectedId}`, payload);
+        await apiPatch<Provider>(`/settings/services/${selectedId}`, payload);
       }
 
       await refreshProviders();

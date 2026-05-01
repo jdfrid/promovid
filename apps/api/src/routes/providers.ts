@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { ProviderType } from "@prisma/client";
 import { prisma } from "../db.js";
@@ -20,7 +20,7 @@ const updateProviderSchema = providerSchema.partial().extend({
 });
 
 export async function providerRoutes(app: FastifyInstance) {
-  app.get("/providers", async () => {
+  const listProviders = async () => {
     const tenant = await getDemoTenant();
     const providers = await prisma.providerCredential.findMany({
       where: { tenantId: tenant.id },
@@ -33,9 +33,9 @@ export async function providerRoutes(app: FastifyInstance) {
         hasSecret: Boolean(_encryptedKey)
       }))
     };
-  });
+  };
 
-  app.post("/providers", async (request, reply) => {
+  const saveProvider = async (request: FastifyRequest, reply: FastifyReply) => {
     const input = providerSchema.parse(request.body);
     const tenant = await getDemoTenant();
     const existing = await prisma.providerCredential.findFirst({
@@ -57,23 +57,23 @@ export async function providerRoutes(app: FastifyInstance) {
         }
       })
       : await prisma.providerCredential.create({
-        data: {
-        tenantId: tenant.id,
-        type: input.type,
-        provider: input.provider,
-        displayName: input.displayName,
-        encryptedKey: input.apiKey ? encryptSecret(input.apiKey) : null,
-        priority: input.priority,
-        enabled: input.enabled,
-        config: input.config as Prisma.InputJsonValue
+          data: {
+            tenantId: tenant.id,
+            type: input.type,
+            provider: input.provider,
+            displayName: input.displayName,
+            encryptedKey: input.apiKey ? encryptSecret(input.apiKey) : null,
+            priority: input.priority,
+            enabled: input.enabled,
+            config: input.config as Prisma.InputJsonValue
         }
       });
 
     reply.code(existing ? 200 : 201);
     return { data: { ...provider, encryptedKey: undefined, hasSecret: Boolean(provider.encryptedKey) } };
-  });
+  };
 
-  app.patch("/providers/:providerId", async (request) => {
+  const updateProvider = async (request: FastifyRequest) => {
     const params = z.object({ providerId: z.string() }).parse(request.params);
     const input = updateProviderSchema.parse(request.body);
     const tenant = await getDemoTenant();
@@ -100,7 +100,15 @@ export async function providerRoutes(app: FastifyInstance) {
     });
 
     return { data: { ...provider, encryptedKey: undefined, hasSecret: Boolean(provider.encryptedKey) } };
-  });
+  };
+
+  app.get("/providers", listProviders);
+  app.post("/providers", saveProvider);
+  app.patch("/providers/:providerId", updateProvider);
+
+  app.get("/settings/services", listProviders);
+  app.post("/settings/services", saveProvider);
+  app.patch("/settings/services/:providerId", updateProvider);
 }
 
 async function getDemoTenant() {
