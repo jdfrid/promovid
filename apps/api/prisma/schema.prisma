@@ -152,6 +152,23 @@ model RenderJob {
   @@index([tenantId, status])
 }
 
+model RenderFile {
+  id          String   @id @default(cuid())
+  tenantId    String
+  projectId   String
+  sceneId     String?
+  renderJobId String?
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  data        Bytes
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, projectId])
+  @@index([renderJobId])
+  @@index([sceneId])
+}
+
 model ProviderCredential {
   id             String       @id @default(cuid())
   tenantId       String

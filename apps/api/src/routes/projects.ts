@@ -69,6 +69,23 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: logs };
   });
 
+  app.get("/render-files/:fileId", async (request, reply) => {
+    const params = z.object({ fileId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const file = await prisma.renderFile.findFirstOrThrow({
+      where: {
+        id: params.fileId,
+        tenantId: tenant.id
+      }
+    });
+
+    reply
+      .header("content-type", file.mimeType)
+      .header("content-length", String(file.sizeBytes))
+      .header("content-disposition", `attachment; filename="${file.filename}"`)
+      .send(Buffer.from(file.data));
+  });
+
   app.post("/projects", async (request, reply) => {
     const operationLogs: OperationLog[] = [];
     const input = createProjectSchema.parse(request.body);

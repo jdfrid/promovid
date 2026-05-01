@@ -1,5 +1,7 @@
 import { Worker } from "bullmq";
 import type { Prisma } from "@prisma/client";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { RenderJobPayload } from "@promovid/shared";
 import { prisma } from "./db.js";
 import { redisConnection } from "./queue.js";
@@ -92,6 +94,13 @@ const worker = new Worker<RenderJobPayload>(
         onLog: log
       });
       renderedClipPaths.push(clip.outputPath);
+      const clipFile = await storeRenderFile({
+        tenantId: job.data.tenantId,
+        projectId: project.id,
+        sceneId: scene.id,
+        renderJobId: jobId,
+        filePath: clip.outputPath
+      });
 
       await prisma.scene.update({
         where: { id: scene.id },
@@ -99,14 +108,15 @@ const worker = new Worker<RenderJobPayload>(
           mediaUrl: assets.mediaUrl,
           voiceUrl: assets.voiceUrl,
           musicUrl: assets.musicUrl,
-          clipUrl: clip.outputUrl,
+          clipUrl: `/api/render-files/${clipFile.id}`,
           renderLog: { logs: assets.log } as Prisma.InputJsonValue
         }
       });
       await log("scene_render_completed", "קליפ הסצנה מוכן להורדה", {
         sceneId: scene.id,
         scene: index + 1,
-        clipUrl: clip.outputUrl
+        clipUrl: `/api/render-files/${clipFile.id}`,
+        sizeBytes: clipFile.sizeBytes
       });
     }
 
@@ -121,6 +131,12 @@ const worker = new Worker<RenderJobPayload>(
       clipPaths: renderedClipPaths,
       onLog: log
     });
+    const finalFile = await storeRenderFile({
+      tenantId: job.data.tenantId,
+      projectId: project.id,
+      renderJobId: jobId,
+      filePath: output.outputPath
+    });
 
     await job.updateProgress(90);
 
@@ -130,7 +146,7 @@ const worker = new Worker<RenderJobPayload>(
         data: {
           status: "COMPLETED",
           progress: 100,
-          outputUrl: output.outputUrl,
+          outputUrl: `/api/render-files/${finalFile.id}`,
           stage: "completed"
         }
       }),
@@ -139,7 +155,10 @@ const worker = new Worker<RenderJobPayload>(
         data: { status: "COMPLETED" }
       })
     ]);
-    await log("render_job_completed", "כל הסרטונים מוכנים להורדה", { outputUrl: output.outputUrl });
+    await log("render_job_completed", "כל הסרטונים מוכנים להורדה", {
+      outputUrl: `/api/render-files/${finalFile.id}`,
+      sizeBytes: finalFile.sizeBytes
+    });
   },
   {
     connection: redisConnection,
@@ -208,3 +227,29 @@ process.on("SIGINT", () => {
 });
 
 console.log("AdBot render worker is running");
+
+async function storeRenderFile(input: {
+  tenantId: string;
+  projectId: string;
+  sceneId?: string;
+  renderJobId?: string;
+  filePath: string;
+}) {
+  const data = await readFile(input.filePath);
+  return prisma.renderFile.create({
+    data: {
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      sceneId: input.sceneId,
+      renderJobId: input.renderJobId,
+      filename: path.basename(input.filePath),
+      mimeType: "video/mp4",
+      sizeBytes: data.byteLength,
+      data
+    },
+    select: {
+      id: true,
+      sizeBytes: true
+    }
+  });
+}
