@@ -66,7 +66,7 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
 }
 
 function buildPexelsQuery(scene: Scene) {
-  const source = `${scene.title} ${scene.visualPrompt} ${scene.narration}`;
+  const source = scene.visualPrompt || `${scene.title} ${scene.narration}`;
   const cleaned = source
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
@@ -76,7 +76,7 @@ function buildPexelsQuery(scene: Scene) {
     .filter((word) => !mediaStopWords.has(word));
 
   const englishWords = cleaned.filter((word) => /^[a-z0-9-]+$/.test(word));
-  const selected = (englishWords.length >= 2 ? englishWords : cleaned).slice(0, 6);
+  const selected = (englishWords.length >= 2 ? englishWords : cleaned).slice(0, 12);
   return selected.join(" ");
 }
 
@@ -90,6 +90,20 @@ const mediaStopWords = new Set([
   "advertisement",
   "promotional",
   "product",
+  "opening",
+  "action",
+  "call",
+  "cta",
+  "website",
+  "introducing",
+  "tired",
+  "same",
+  "old",
+  "ready",
+  "elevate",
+  "style",
+  "timepiece",
+  "redefines",
   "with",
   "the",
   "and",
@@ -98,7 +112,6 @@ const mediaStopWords = new Set([
   "that",
   "you",
   "your",
-  "ready",
   "text",
   "screen",
   "background"
@@ -159,9 +172,44 @@ async function searchPexels(query: string, apiKey: string, sceneDuration: number
     }
 
     const payload = (await response.json()) as PexelsSearchResponse;
-    const maxDuration = Math.min(8, Math.max(7, sceneDuration));
-    const candidates = (payload.videos ?? [])
-      .filter((video) => video.duration > 0 && video.duration <= maxDuration)
+    const videos = payload.videos ?? [];
+    const idealMaxDuration = Math.min(8, Math.max(7, sceneDuration));
+    const candidates = buildPexelsCandidates(videos, 7, idealMaxDuration);
+    const fallbackCandidates = candidates.length > 0 ? candidates : buildPexelsCandidates(videos, 1, 30);
+
+    if (fallbackCandidates.length === 0) {
+      log.push({
+        step: "media_provider_no_match",
+        message: "Pexels לא החזיר סרטון באורך 7-8 שניות וגם לא עד 30 שניות",
+        metadata: { query, idealMaxDuration, fallbackMaxDuration: 30, returnedVideos: videos.length }
+      });
+      return undefined;
+    }
+
+    if (candidates.length === 0) {
+      log.push({
+        step: "media_provider_fallback_duration",
+        message: "לא נמצא וידאו 7-8 שניות; בוחר וידאו עד 30 שניות",
+        metadata: { query, returnedVideos: videos.length }
+      });
+    }
+
+    return fallbackCandidates[0];
+  } catch (error) {
+    log.push({
+      step: "media_provider_error",
+      message: "קריאת Pexels נכשלה או עברה timeout",
+      metadata: { query, error: error instanceof Error ? error.message : "unknown error" }
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildPexelsCandidates(videos: NonNullable<PexelsSearchResponse["videos"]>, minDuration: number, maxDuration: number) {
+  return videos
+      .filter((video) => video.duration >= minDuration && video.duration <= maxDuration)
       .flatMap((video) => {
         return (video.video_files ?? [])
           .filter((file) => file.link)
@@ -173,35 +221,13 @@ async function searchPexels(query: string, apiKey: string, sceneDuration: number
             fileSize: file.file_size ?? Number.MAX_SAFE_INTEGER
           }));
       })
-      .filter((file) => file.fileSize <= 15 * 1024 * 1024)
       .sort((a, b) => {
-        const sizeDiff = a.fileSize - b.fileSize;
-        if (sizeDiff !== 0) {
-          return sizeDiff;
+        const durationDiff = Math.abs(a.duration - 8) - Math.abs(b.duration - 8);
+        if (durationDiff !== 0) {
+          return durationDiff;
         }
-        return Math.abs(a.duration - sceneDuration) - Math.abs(b.duration - sceneDuration);
+        return (a.fileSize ?? Number.MAX_SAFE_INTEGER) - (b.fileSize ?? Number.MAX_SAFE_INTEGER);
       });
-
-    if (candidates.length === 0) {
-      log.push({
-        step: "media_provider_no_match",
-        message: "Pexels לא החזיר סרטון שעומד במגבלות אורך/משקל",
-        metadata: { query, maxDuration, maxFileSizeMb: 15, returnedVideos: payload.videos?.length ?? 0 }
-      });
-      return undefined;
-    }
-
-    return candidates[0];
-  } catch (error) {
-    log.push({
-      step: "media_provider_error",
-      message: "קריאת Pexels נכשלה או עברה timeout",
-      metadata: { query, error: error instanceof Error ? error.message : "unknown error" }
-    });
-    return undefined;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 interface PexelsSearchResponse {
