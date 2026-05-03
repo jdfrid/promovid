@@ -29,7 +29,9 @@ async function main() {
   const providers: Array<[ProviderType, string, string]> = [
     ["SCRIPT", "openai", "OpenAI Script Writer"],
     ["MEDIA", "pexels", "Pexels Media Search"],
+    ["VOICE", "openverse", "Openverse Audio Search"],
     ["VOICE", "elevenlabs", "ElevenLabs Voiceover"],
+    ["MUSIC", "openverse", "Openverse Audio Search"],
     ["VIDEO", "gemini", "Gemini Video"],
     ["MERGE", "ffmpeg", "Self-hosted FFmpeg"],
     ["STORAGE", "local", "Local Storage"]

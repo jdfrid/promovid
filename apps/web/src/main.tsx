@@ -675,8 +675,8 @@ function Assets() {
 const providerServiceTypes = [
   { type: "SCRIPT", label: "תסריט", description: "מודלי AI לכתיבת תסריטים וחלוקה לסצנות.", presets: [["gemini", "Gemini Script Writer"], ["openai", "OpenAI Script Writer"], ["anthropic", "Claude Script Writer"]] },
   { type: "MEDIA", label: "מדיה", description: "חיפוש ושליפת תמונות ווידאו ממאגרים.", presets: [["pexels", "Pexels Media Search"], ["shutterstock", "Shutterstock"], ["unsplash", "Unsplash"]] },
-  { type: "VOICE", label: "קול", description: "TTS וקריינות לסרטונים.", presets: [["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
-  { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע וספריות סאונד.", presets: [["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
+  { type: "VOICE", label: "קול", description: "TTS, קריינות וקבצי קול לסרטונים.", presets: [["openverse", "Openverse Audio Search"], ["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
+  { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע, קבצי קול וספריות סאונד.", presets: [["openverse", "Openverse Audio Search"], ["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
   { type: "AVATAR", label: "אווטרים", description: "יצירת דמויות/דוברים וירטואליים.", presets: [["heygen", "HeyGen"], ["did", "D-ID"], ["synthesia", "Synthesia"]] },
   { type: "VIDEO", label: "יצירת וידאו", description: "מחוללי וידאו AI ליצירת קליפים לכל סצנה.", presets: [["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
   { type: "MERGE", label: "מיזוג", description: "חיבור סצנות, כתוביות, watermark ו־transitions.", presets: [["ffmpeg", "Self-hosted FFmpeg"], ["shotstack", "Shotstack"], ["creatomate", "Creatomate"]] },

@@ -1,4 +1,6 @@
 import type { ProviderCredential, Scene } from "@prisma/client";
+import type { OpenverseAudioDetail } from "@openverse/api-client";
+import { OpenverseClient } from "@openverse/api-client";
 import { decryptSecret } from "../crypto.js";
 
 export interface SceneAssets {
@@ -9,6 +11,20 @@ export interface SceneAssets {
 }
 
 type ProviderByType = Partial<Record<"MEDIA" | "VOICE" | "MUSIC", ProviderCredential[]>>;
+
+interface OpenverseAudioCandidate {
+  url: string;
+  title: string | null;
+  creator: string | null;
+  provider: string | null;
+  source: string | null;
+  license: string;
+  licenseUrl: string | null;
+  duration: number | null;
+  filetype: string | null;
+  filesize?: number;
+  foreignLandingUrl: string | null;
+}
 
 export async function collectSceneAssets(
   scene: Scene,
@@ -141,6 +157,25 @@ function safeDecryptProviderKey(encryptedKey: string, provider: string, log: Sce
 async function createVoice(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"]) {
   for (const provider of providers) {
     log.push({ step: "voice_provider_attempt", message: "מנסה ליצור קריינות לסצנה", metadata: { provider: provider.provider, sceneId: scene.id } });
+    if (provider.provider.toLowerCase().includes("openverse")) {
+      const audio = await searchOpenverseAudio({
+        provider,
+        query: buildAudioQuery(scene),
+        targetDuration: scene.durationSeconds,
+        log,
+        logPrefix: "voice"
+      });
+      if (audio) {
+        log.push({
+          step: "voice_provider_success",
+          message: "נמצא קובץ קול ב-Openverse לסצנה",
+          metadata: audio.metadata
+        });
+        return audio.url;
+      }
+      continue;
+    }
+
     log.push({ step: "voice_provider_deferred", message: "חיבור TTS מלא יופעל בשלב הבא; הקליפ יכלול כרגע כתוביות", metadata: { provider: provider.provider } });
   }
   return undefined;
@@ -149,8 +184,206 @@ async function createVoice(scene: Scene, providers: ProviderCredential[], log: S
 async function findMusic(scene: Scene, providers: ProviderCredential[], log: SceneAssets["log"], musicPrompt?: string | null) {
   for (const provider of providers) {
     log.push({ step: "music_provider_attempt", message: "מנסה לאתר מוסיקת רקע לסצנה", metadata: { provider: provider.provider, sceneId: scene.id, musicPrompt } });
+    if (provider.provider.toLowerCase().includes("openverse")) {
+      const audio = await searchOpenverseAudio({
+        provider,
+        query: buildAudioQuery(scene, musicPrompt),
+        targetDuration: scene.durationSeconds,
+        log,
+        logPrefix: "music"
+      });
+      if (audio) {
+        log.push({
+          step: "music_provider_success",
+          message: "נמצא קובץ מוסיקה/אודיו ב-Openverse לסצנה",
+          metadata: audio.metadata
+        });
+        return audio.url;
+      }
+      continue;
+    }
+
     log.push({ step: "music_provider_deferred", message: "חיבור מוסיקה חיצונית יופעל בשלב הבא; הקליפ יורנדר ללא מוסיקה", metadata: { provider: provider.provider } });
   }
+  return undefined;
+}
+
+function buildAudioQuery(scene: Scene, prompt?: string | null) {
+  const source = prompt || scene.visualPrompt || `${scene.title} ${scene.narration}`;
+  const cleaned = source
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/\s+/)
+    .map((word) => word.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((word) => word.length > 2)
+    .filter((word) => !audioStopWords.has(word));
+
+  const englishWords = cleaned.filter((word) => /^[a-z0-9-]+$/.test(word));
+  const selected = (englishWords.length >= 2 ? englishWords : cleaned).slice(0, 10);
+  return selected.join(" ") || "upbeat background music";
+}
+
+const audioStopWords = new Set([
+  ...mediaStopWords,
+  "music",
+  "audio",
+  "sound",
+  "voice",
+  "narration",
+  "background",
+  "clip"
+]);
+
+async function searchOpenverseAudio(input: {
+  provider: ProviderCredential;
+  query: string;
+  targetDuration: number;
+  log: SceneAssets["log"];
+  logPrefix: "voice" | "music";
+}) {
+  const credentials = openverseCredentials(input.provider, input.log);
+  const config = asRecord(input.provider.config);
+  const baseUrl = stringConfig(config.baseUrl);
+  const pageSize = numberConfig(config.pageSize) ?? 10;
+  const timeoutMs = numberConfig(config.timeoutMs) ?? 8000;
+  const client = OpenverseClient({
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(credentials ? { credentials } : {})
+  });
+
+  input.log.push({
+    step: `${input.logPrefix}_openverse_search_started`,
+    message: "מחפש קובץ אודיו ב-Openverse",
+    metadata: {
+      provider: input.provider.provider,
+      query: input.query,
+      authenticated: Boolean(credentials),
+      pageSize
+    }
+  });
+
+  const timeout = new Promise<never>((_resolve, reject) => {
+    setTimeout(() => reject(new Error(`Openverse search timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    const response = await Promise.race([
+      client("GET v1/audio/", {
+        params: {
+          q: input.query,
+          page_size: pageSize,
+          mature: false
+        } as never
+      }),
+      timeout
+    ]);
+
+    if (response.meta.status >= 400) {
+      input.log.push({
+        step: `${input.logPrefix}_openverse_error`,
+        message: "Openverse החזיר שגיאה בחיפוש אודיו",
+        metadata: { status: response.meta.status, query: input.query }
+      });
+      return undefined;
+    }
+
+    const candidates = response.body.results
+      .filter((audio) => Boolean(audio.url) && !audio.mature)
+      .map((audio: OpenverseAudioDetail): OpenverseAudioCandidate => ({
+        url: audio.url!,
+        title: audio.title,
+        creator: audio.creator,
+        provider: audio.provider,
+        source: audio.source,
+        license: audio.license,
+        licenseUrl: audio.license_url,
+        duration: audio.duration,
+        filetype: audio.filetype,
+        filesize: parseFileSize(audio.filesize),
+        foreignLandingUrl: audio.foreign_landing_url
+      }))
+      .sort((a: OpenverseAudioCandidate, b: OpenverseAudioCandidate) => {
+        const durationDiff = Math.abs((a.duration ?? input.targetDuration) - input.targetDuration) - Math.abs((b.duration ?? input.targetDuration) - input.targetDuration);
+        if (durationDiff !== 0) {
+          return durationDiff;
+        }
+        return (a.filesize ?? Number.MAX_SAFE_INTEGER) - (b.filesize ?? Number.MAX_SAFE_INTEGER);
+      });
+
+    const selected = candidates[0];
+    if (!selected) {
+      input.log.push({
+        step: `${input.logPrefix}_openverse_no_match`,
+        message: "Openverse לא החזיר קובץ אודיו מתאים",
+        metadata: { query: input.query, returnedResults: response.body.results.length }
+      });
+      return undefined;
+    }
+
+    return {
+      url: selected.url,
+      metadata: {
+        provider: input.provider.provider,
+        query: input.query,
+        title: selected.title,
+        creator: selected.creator,
+        source: selected.source ?? selected.provider,
+        license: selected.license,
+        licenseUrl: selected.licenseUrl,
+        duration: selected.duration,
+        filetype: selected.filetype,
+        filesize: selected.filesize,
+        foreignLandingUrl: selected.foreignLandingUrl,
+        url: selected.url
+      }
+    };
+  } catch (error) {
+    input.log.push({
+      step: `${input.logPrefix}_openverse_error`,
+      message: "חיפוש Openverse נכשל או עבר timeout",
+      metadata: {
+        query: input.query,
+        error: error instanceof Error ? error.message : "unknown openverse error"
+      }
+    });
+    return undefined;
+  }
+}
+
+function openverseCredentials(provider: ProviderCredential, log: SceneAssets["log"]) {
+  const config = asRecord(provider.config);
+  const configClientId = stringConfig(config.clientId);
+  const configClientSecret = stringConfig(config.clientSecret);
+  if (configClientId && configClientSecret) {
+    return { clientId: configClientId, clientSecret: configClientSecret };
+  }
+
+  if (!provider.encryptedKey) {
+    return undefined;
+  }
+
+  const secret = safeDecryptProviderKey(provider.encryptedKey, provider.provider, log);
+  if (!secret) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(secret) as { clientId?: string; clientSecret?: string };
+    if (parsed.clientId && parsed.clientSecret) {
+      return { clientId: parsed.clientId, clientSecret: parsed.clientSecret };
+    }
+  } catch {
+    const [clientId, clientSecret] = secret.split(":");
+    if (clientId && clientSecret) {
+      return { clientId, clientSecret };
+    }
+  }
+
+  log.push({
+    step: "openverse_credentials_ignored",
+    message: "מפתח Openverse נשמר אך לא זוהה כ-clientId:clientSecret או JSON; ממשיך בחיפוש אנונימי",
+    metadata: { provider: provider.provider }
+  });
   return undefined;
 }
 
@@ -244,4 +477,25 @@ interface PexelsSearchResponse {
       file_size?: number;
     }>;
   }>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringConfig(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberConfig(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseFileSize(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
