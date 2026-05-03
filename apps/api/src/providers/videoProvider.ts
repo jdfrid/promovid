@@ -148,7 +148,7 @@ async function generateWithRunway(input: {
   const model = stringConfig(config.model) ?? "gen4.5";
   const ratio = stringConfig(config.ratio) ?? runwayRatioFor(input.aspectRatio);
   const duration = numberConfig(config.durationSeconds) ?? Math.min(10, Math.max(2, Math.round(input.scene.durationSeconds)));
-  const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 600;
+  const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 120;
 
   await input.onLog?.("video_provider_request_sent", "נשלחה בקשה ישירה ל-Runway ליצירת וידאו", {
     provider: input.provider.provider,
@@ -159,7 +159,7 @@ async function generateWithRunway(input: {
     timeoutSeconds
   });
 
-  const createResponse = await fetch(`${baseUrl}/v1/image_to_video`, {
+  const createResponse = await fetchWithTimeout(`${baseUrl}/v1/image_to_video`, {
     method: "POST",
     headers: runwayHeaders(apiKey),
     body: JSON.stringify({
@@ -168,7 +168,7 @@ async function generateWithRunway(input: {
       ratio,
       duration
     })
-  });
+  }, 20_000);
   const createPayload = await readJson(createResponse);
   if (!createResponse.ok) {
     throw new Error(`Runway create task failed ${createResponse.status}: ${JSON.stringify(createPayload).slice(0, 700)}`);
@@ -294,9 +294,9 @@ async function pollRunwayTask(input: {
 
   while (Date.now() - startedAt < input.timeoutSeconds * 1000) {
     attempts += 1;
-    const response = await fetch(`${input.baseUrl}/v1/tasks/${input.taskId}`, {
+    const response = await fetchWithTimeout(`${input.baseUrl}/v1/tasks/${input.taskId}`, {
       headers: runwayHeaders(input.apiKey)
-    });
+    }, 15_000);
     const payload = await readJson(response);
     if (!response.ok) {
       throw new Error(`Runway task polling failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
@@ -332,7 +332,7 @@ async function downloadGeneratedVideo(input: {
   const outputDirectory = path.resolve("./renders");
   await mkdir(outputDirectory, { recursive: true });
   const outputPath = path.join(outputDirectory, `${input.projectId}-generated-scene-${input.sceneOrder + 1}-${nanoid(8)}.mp4`);
-  const response = await fetch(input.url);
+  const response = await fetchWithTimeout(input.url, {}, 60_000);
   if (!response.ok) {
     throw new Error(`Could not download generated video ${response.status}`);
   }
@@ -409,6 +409,20 @@ function runwayRatioFor(aspectRatio: string) {
 
 function wait(milliseconds: number) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

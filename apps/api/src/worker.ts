@@ -92,14 +92,18 @@ const worker = new Worker<RenderJobPayload>(
         data: { progress: Math.min(baseProgress + 8, 85), stage: `scene_${index + 1}_video_generation` }
       });
       await log("scene_video_generation_started", "מתחיל יצירת קליפ וידאו חדש לסצנה", { sceneId: scene.id, scene: index + 1 });
-      const clip = await generateSceneVideo({
-        project,
-        scene,
-        videoProviders: providersByType.VIDEO,
-        referenceMediaUrl: assets.mediaUrl,
-        aspectRatio: project.aspectRatio,
-        onLog: log
-      });
+      const clip = await withStageTimeout(
+        generateSceneVideo({
+          project,
+          scene,
+          videoProviders: providersByType.VIDEO,
+          referenceMediaUrl: assets.mediaUrl,
+          aspectRatio: project.aspectRatio,
+          onLog: log
+        }),
+        150_000,
+        `Scene ${index + 1} video generation timed out after 150 seconds`
+      );
       renderedClipPaths.push(clip.outputPath);
       const clipFile = await storeRenderFile({
         tenantId: job.data.tenantId,
@@ -239,6 +243,22 @@ async function shutdown(signal: string) {
   } catch (error) {
     console.error("AdBot render worker shutdown failed", error);
     process.exit(1);
+  }
+}
+
+async function withStageTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
