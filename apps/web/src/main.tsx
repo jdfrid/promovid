@@ -890,13 +890,13 @@ function Settings() {
           )}
           {activeType === "VIDEO" && (
             <div className="video-provider-config">
-              <label>Endpoint / Webhook URL
-                <input value={form.endpoint} placeholder="https://your-video-service.example/generate" onChange={(event) => setForm({ ...form, endpoint: event.target.value })} />
+              <label>Endpoint / Webhook URL אופציונלי
+                <input value={form.endpoint} placeholder="ריק ל-Runway ישיר, או webhook שמחזיר videoUrl" onChange={(event) => setForm({ ...form, endpoint: event.target.value })} />
               </label>
               <label>Timeout בשניות
                 <input type="number" min="30" max="900" step="10" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: Number(event.target.value) })} />
               </label>
-              <p className="muted">ספק VIDEO יכול להיות Runway/Kling/Gemini/Veo דרך endpoint שמקבל prompt ו-referenceMediaUrl ומחזיר JSON עם videoUrl.</p>
+              <p className="muted">Runway מופעל ישירות עם ה־API Key. עבור Kling/Gemini/Veo אפשר להגדיר endpoint שמקבל prompt ו-referenceMediaUrl ומחזיר JSON עם videoUrl.</p>
             </div>
           )}
           <div className="row compact-row">

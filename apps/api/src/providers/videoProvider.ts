@@ -41,7 +41,16 @@ export async function generateSceneVideo(input: {
     });
 
     try {
-      const generated = await generateWithConfiguredEndpoint({
+      const generated = providerName.includes("runway")
+        ? await generateWithRunway({
+          provider,
+          prompt: videoPrompt,
+          scene: input.scene,
+          project: input.project,
+          aspectRatio: input.aspectRatio,
+          onLog: input.onLog
+        })
+        : await generateWithConfiguredEndpoint({
         provider,
         prompt: videoPrompt,
         scene: input.scene,
@@ -121,6 +130,83 @@ export function buildSceneVideoPrompt(project: Project, scene: Scene, referenceM
   ].filter(Boolean).join("\n");
 }
 
+async function generateWithRunway(input: {
+  provider: ProviderCredential;
+  prompt: string;
+  scene: Scene;
+  project: Project;
+  aspectRatio: string;
+  onLog?: VideoProviderLog;
+}) {
+  const apiKey = input.provider.encryptedKey ? decryptSecret(input.provider.encryptedKey) : undefined;
+  if (!apiKey) {
+    throw new Error("Runway provider is missing an API key.");
+  }
+
+  const config = asRecord(input.provider.config);
+  const baseUrl = stringConfig(config.baseUrl) ?? "https://api.dev.runwayml.com";
+  const model = stringConfig(config.model) ?? "gen4.5";
+  const ratio = stringConfig(config.ratio) ?? runwayRatioFor(input.aspectRatio);
+  const duration = numberConfig(config.durationSeconds) ?? Math.min(10, Math.max(2, Math.round(input.scene.durationSeconds)));
+  const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 600;
+
+  await input.onLog?.("video_provider_request_sent", "נשלחה בקשה ישירה ל-Runway ליצירת וידאו", {
+    provider: input.provider.provider,
+    sceneId: input.scene.id,
+    model,
+    ratio,
+    duration,
+    timeoutSeconds
+  });
+
+  const createResponse = await fetch(`${baseUrl}/v1/image_to_video`, {
+    method: "POST",
+    headers: runwayHeaders(apiKey),
+    body: JSON.stringify({
+      model,
+      promptText: input.prompt,
+      ratio,
+      duration
+    })
+  });
+  const createPayload = await readJson(createResponse);
+  if (!createResponse.ok) {
+    throw new Error(`Runway create task failed ${createResponse.status}: ${JSON.stringify(createPayload).slice(0, 700)}`);
+  }
+
+  const taskId = stringConfig(createPayload.id);
+  if (!taskId) {
+    throw new Error(`Runway create task response did not include id: ${JSON.stringify(createPayload).slice(0, 500)}`);
+  }
+
+  await input.onLog?.("video_provider_task_created", "Runway התחיל משימת יצירת וידאו", {
+    provider: input.provider.provider,
+    sceneId: input.scene.id,
+    taskId
+  });
+
+  const task = await pollRunwayTask({
+    baseUrl,
+    apiKey,
+    taskId,
+    timeoutSeconds,
+    onLog: input.onLog
+  });
+  const generatedVideoUrl = extractTaskOutputUrl(task);
+  if (!generatedVideoUrl) {
+    throw new Error(`Runway task completed without output video URL: ${JSON.stringify(task).slice(0, 700)}`);
+  }
+
+  const outputPath = await downloadGeneratedVideo({
+    projectId: input.project.id,
+    sceneOrder: input.scene.order,
+    url: generatedVideoUrl,
+    onLog: input.onLog
+  });
+
+  return { outputPath, generatedVideoUrl };
+}
+
 async function generateWithConfiguredEndpoint(input: {
   provider: ProviderCredential;
   prompt: string;
@@ -196,6 +282,47 @@ async function generateWithConfiguredEndpoint(input: {
   }
 }
 
+async function pollRunwayTask(input: {
+  baseUrl: string;
+  apiKey: string;
+  taskId: string;
+  timeoutSeconds: number;
+  onLog?: VideoProviderLog;
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  while (Date.now() - startedAt < input.timeoutSeconds * 1000) {
+    attempts += 1;
+    const response = await fetch(`${input.baseUrl}/v1/tasks/${input.taskId}`, {
+      headers: runwayHeaders(input.apiKey)
+    });
+    const payload = await readJson(response);
+    if (!response.ok) {
+      throw new Error(`Runway task polling failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
+    }
+
+    const status = stringConfig(payload.status) ?? "UNKNOWN";
+    await input.onLog?.("video_provider_task_progress", "בודק סטטוס משימת Runway", {
+      taskId: input.taskId,
+      status,
+      attempts
+    });
+
+    if (status === "SUCCEEDED") {
+      return payload;
+    }
+
+    if (["FAILED", "CANCELLED", "CANCELED"].includes(status)) {
+      throw new Error(`Runway task ${status}: ${JSON.stringify(payload).slice(0, 700)}`);
+    }
+
+    await wait(5000);
+  }
+
+  throw new Error(`Runway task timed out after ${input.timeoutSeconds} seconds`);
+}
+
 async function downloadGeneratedVideo(input: {
   projectId: string;
   sceneOrder: number;
@@ -241,6 +368,17 @@ function extractVideoUrl(payload: Record<string, unknown>) {
     ?? stringConfig(asRecord(payload.data).url);
 }
 
+function extractTaskOutputUrl(payload: Record<string, unknown>) {
+  const output = payload.output;
+  if (Array.isArray(output)) {
+    return output.map((item) => stringConfig(item)).find(Boolean);
+  }
+
+  return stringConfig(output)
+    ?? stringConfig(payload.videoUrl)
+    ?? stringConfig(payload.url);
+}
+
 function videoProviderHint(providerName: string) {
   if (providerName.includes("gemini") || providerName.includes("veo")) {
     return "Gemini/Veo adapter is available through a configured endpoint/webhookUrl until direct Veo API is enabled.";
@@ -249,6 +387,28 @@ function videoProviderHint(providerName: string) {
     return "Set config.endpoint or config.webhookUrl to a service that returns { videoUrl }.";
   }
   return "Set config.endpoint or config.webhookUrl to a service that accepts prompt/referenceMediaUrl and returns { videoUrl }.";
+}
+
+function runwayHeaders(apiKey: string) {
+  return {
+    "content-type": "application/json",
+    authorization: `Bearer ${apiKey}`,
+    "x-runway-version": "2024-11-06"
+  };
+}
+
+function runwayRatioFor(aspectRatio: string) {
+  if (aspectRatio === "16:9") {
+    return "1280:720";
+  }
+  if (aspectRatio === "1:1") {
+    return "960:960";
+  }
+  return "720:1280";
+}
+
+function wait(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
