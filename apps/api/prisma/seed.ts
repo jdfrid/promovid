@@ -30,6 +30,7 @@ async function main() {
     ["SCRIPT", "openai", "OpenAI Script Writer"],
     ["MEDIA", "pexels", "Pexels Media Search"],
     ["VOICE", "elevenlabs", "ElevenLabs Voiceover"],
+    ["VIDEO", "gemini", "Gemini Video"],
     ["MERGE", "ffmpeg", "Self-hosted FFmpeg"],
     ["STORAGE", "local", "Local Storage"]
   ];

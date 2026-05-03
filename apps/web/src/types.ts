@@ -9,6 +9,11 @@ export interface Scene {
   voiceUrl?: string | null;
   musicUrl?: string | null;
   clipUrl?: string | null;
+  referenceMediaUrl?: string | null;
+  generatedVideoUrl?: string | null;
+  videoProvider?: string | null;
+  videoPrompt?: string | null;
+  generationStatus?: "generated" | "fallback" | "failed" | string | null;
 }
 
 export interface RenderJob {

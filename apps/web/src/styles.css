@@ -331,6 +331,12 @@ textarea {
   color: #ff9a9a;
 }
 
+.warning-notice {
+  border-color: rgba(255, 195, 92, 0.35);
+  background: rgba(255, 195, 92, 0.12);
+  color: #ffd38a;
+}
+
 .log-header {
   display: flex;
   justify-content: space-between;
@@ -433,6 +439,33 @@ textarea {
 
 .scene p {
   color: #f7f7fb;
+}
+
+.scene-details {
+  margin-top: 10px;
+  color: #dfe2ff;
+}
+
+.scene-details code {
+  display: block;
+  direction: ltr;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 8px;
+  color: #9ea6ff;
+}
+
+.scene-generation-meta,
+.video-provider-config {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scene-generation-meta {
+  color: #aeb5d9;
+  font-size: 0.84rem;
 }
 
 .prompt-card {

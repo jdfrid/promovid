@@ -76,6 +76,7 @@ export async function renderSceneClip(input: {
   aspectRatio: string;
   mediaUrl?: string;
   onLog?: RenderLogger;
+  fallbackLabel?: string;
 }) {
   const outputDirectory = path.resolve("./renders");
   await mkdir(outputDirectory, { recursive: true });
@@ -91,7 +92,7 @@ export async function renderSceneClip(input: {
     input.mediaUrl ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : undefined,
     `drawtext=textfile='${escapeFilterPath(titlePath)}':fontcolor=white:fontsize=${Math.round(width / 16)}:x=(w-text_w)/2:y=h*0.18`,
     `drawtext=textfile='${escapeFilterPath(narrationPath)}':fontcolor=white:fontsize=${Math.round(width / 30)}:x=(w-text_w)/2:y=h*0.48:box=1:boxcolor=black@0.35:boxborderw=18`,
-    `drawtext=text='Scene ${input.scene.order + 1} / ${input.scene.durationSeconds}s':fontcolor=#b8b8ff:fontsize=${Math.round(width / 38)}:x=(w-text_w)/2:y=h*0.86`
+    `drawtext=text='${input.fallbackLabel ?? `Scene ${input.scene.order + 1} / ${input.scene.durationSeconds}s`}':fontcolor=#b8b8ff:fontsize=${Math.round(width / 38)}:x=(w-text_w)/2:y=h*0.86`
   ].filter(Boolean).join(",");
 
   const mediaArgs = input.mediaUrl

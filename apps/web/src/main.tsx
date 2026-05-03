@@ -383,8 +383,22 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
               <strong>{scene.title}</strong>
               <p>{scene.narration}</p>
               <small>{scene.visualPrompt} · {scene.durationSeconds}s</small>
+              {scene.generationStatus === "fallback" && (
+                <p className="notice warning-notice">שים לב: הסצנה נוצרה ב־FFmpeg fallback ולא דרך מחולל VIDEO אמיתי.</p>
+              )}
+              {scene.videoPrompt && (
+                <details className="scene-details">
+                  <summary>Prompt שנשלח לספק הווידאו</summary>
+                  <code>{scene.videoPrompt}</code>
+                </details>
+              )}
+              <div className="scene-generation-meta">
+                {scene.videoProvider && <span>ספק וידאו: {scene.videoProvider}</span>}
+                {scene.generationStatus && <span>סטטוס יצירה: {scene.generationStatus}</span>}
+              </div>
               <div className="scene-assets">
-                {scene.mediaUrl && <a href={scene.mediaUrl} target="_blank">מדיה שנבחרה</a>}
+                {(scene.referenceMediaUrl || scene.mediaUrl) && <a href={scene.referenceMediaUrl ?? scene.mediaUrl ?? ""} target="_blank">Reference media</a>}
+                {scene.generatedVideoUrl && <a href={absoluteAssetUrl(scene.generatedVideoUrl)} target="_blank">Generated video</a>}
                 {scene.voiceUrl && <a href={absoluteAssetUrl(scene.voiceUrl)} target="_blank">קול</a>}
                 {scene.musicUrl && <a href={absoluteAssetUrl(scene.musicUrl)} target="_blank">מוסיקה</a>}
                 {scene.clipUrl && <a href={absoluteAssetUrl(scene.clipUrl)} target="_blank" download>הורדת קליפ סצנה</a>}
@@ -570,8 +584,11 @@ function shouldShowAsProviderMessage(step: string) {
     "media_provider",
     "voice_provider",
     "music_provider",
+    "video_prompt",
+    "video_provider",
     "scene_assets",
     "scene_render",
+    "scene_video",
     "final_render",
     "render_job"
   ].some((prefix) => step.includes(prefix));
@@ -583,6 +600,9 @@ function renderStageLabel(stage: string) {
   }
   if (stage.startsWith("scene_") && stage.endsWith("_render")) {
     return `רינדור קליפ · ${stage.replace("scene_", "סצנה ").replace("_render", "")}`;
+  }
+  if (stage.startsWith("scene_") && stage.endsWith("_video_generation")) {
+    return `יצירת וידאו אמיתי · ${stage.replace("scene_", "סצנה ").replace("_video_generation", "")}`;
   }
 
   const labels: Record<string, string> = {
@@ -664,6 +684,31 @@ const providerServiceTypes = [
   { type: "DISTRIBUTION", label: "הפצה", description: "פרסום לרשתות, webhooks וערוצי יציאה.", presets: [["youtube", "YouTube"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["linkedin", "LinkedIn"]] }
 ] as const;
 
+type ProviderFormState = {
+  model: string;
+  temperature: number;
+  endpoint: string;
+  timeoutSeconds: number;
+};
+
+function providerConfigForForm(activeType: string, form: ProviderFormState) {
+  if (activeType === "SCRIPT") {
+    return {
+      model: form.model.trim() || "gemini-2.5-flash-lite",
+      temperature: Number(form.temperature)
+    };
+  }
+
+  if (activeType === "VIDEO") {
+    return {
+      endpoint: form.endpoint.trim(),
+      timeoutSeconds: Number(form.timeoutSeconds)
+    };
+  }
+
+  return {};
+}
+
 function Settings() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [activeType, setActiveType] = useState(() => localStorage.getItem("promovid:settings-active-type") ?? "SCRIPT");
@@ -678,7 +723,9 @@ function Settings() {
     priority: 1,
     enabled: true,
     model: "gemini-2.5-flash-lite",
-    temperature: 0.7
+    temperature: 0.7,
+    endpoint: "",
+    timeoutSeconds: 180
   });
   useEffect(() => {
     void apiGet<Provider[]>("/settings/services").then(setProviders);
@@ -708,7 +755,9 @@ function Settings() {
         priority: 1,
         enabled: true,
         model: "gemini-2.5-flash-lite",
-        temperature: 0.7
+        temperature: 0.7,
+        endpoint: "",
+        timeoutSeconds: 180
       });
       return;
     }
@@ -724,7 +773,9 @@ function Settings() {
         priority: provider.priority,
         enabled: provider.enabled,
         model: typeof provider.config?.model === "string" ? provider.config.model : "gemini-2.5-flash-lite",
-        temperature: Number(provider.config?.temperature ?? 0.7)
+        temperature: Number(provider.config?.temperature ?? 0.7),
+        endpoint: typeof provider.config?.endpoint === "string" ? provider.config.endpoint : "",
+        timeoutSeconds: Number(provider.config?.timeoutSeconds ?? 180)
       });
     }
   }
@@ -738,12 +789,7 @@ function Settings() {
         type: activeType,
         priority: Number(form.priority),
         apiKey: form.apiKey.trim() || undefined,
-        config: activeType === "SCRIPT"
-          ? {
-              model: form.model.trim() || "gemini-2.5-flash-lite",
-              temperature: Number(form.temperature)
-            }
-          : {}
+        config: providerConfigForForm(activeType, form)
       };
 
       if (selectedId === "new") {
@@ -785,7 +831,9 @@ function Settings() {
                 priority: 1,
                 enabled: true,
                 model: "gemini-2.5-flash-lite",
-                temperature: 0.7
+                temperature: 0.7,
+                endpoint: "",
+                timeoutSeconds: 180
               });
             }}
           >
@@ -840,6 +888,17 @@ function Settings() {
               </label>
             </div>
           )}
+          {activeType === "VIDEO" && (
+            <div className="video-provider-config">
+              <label>Endpoint / Webhook URL
+                <input value={form.endpoint} placeholder="https://your-video-service.example/generate" onChange={(event) => setForm({ ...form, endpoint: event.target.value })} />
+              </label>
+              <label>Timeout בשניות
+                <input type="number" min="30" max="900" step="10" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: Number(event.target.value) })} />
+              </label>
+              <p className="muted">ספק VIDEO יכול להיות Runway/Kling/Gemini/Veo דרך endpoint שמקבל prompt ו-referenceMediaUrl ומחזיר JSON עם videoUrl.</p>
+            </div>
+          )}
           <div className="row compact-row">
             <label>עדיפות
               <input type="number" min="1" value={form.priority} onChange={(event) => setForm({ ...form, priority: Number(event.target.value) })} />
@@ -860,7 +919,7 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7 });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180 });
               }}>
                 {displayName}
               </button>

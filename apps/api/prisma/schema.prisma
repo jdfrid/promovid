@@ -114,6 +114,11 @@ model Scene {
   voiceUrl       String?
   musicUrl       String?
   clipUrl        String?
+  referenceMediaUrl String?
+  generatedVideoUrl String?
+  videoProvider  String?
+  videoPrompt    String?
+  generationStatus String?
   renderLog      Json     @default("{}")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
