@@ -377,6 +377,16 @@ textarea {
   margin-bottom: 20px;
 }
 
+.diagnostic-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.diagnostic-panel button {
+  justify-self: start;
+}
+
 .operation-meta {
   display: flex;
   gap: 16px;

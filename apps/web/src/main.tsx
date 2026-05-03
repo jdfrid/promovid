@@ -176,6 +176,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
   const [project, setProject] = useState<Project>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [diagnosticMessage, setDiagnosticMessage] = useState("");
   const [renderLogs, setRenderLogs] = useState<AuditLog[]>([]);
   const [actionLogs, setActionLogs] = useState<OperationLog[]>(() => {
     try {
@@ -241,6 +242,10 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
       addLog("create_script_response_received", "התקבלה תשובה מהשרת", {
         projectId: createdProject.id,
         sceneCount: createdProject.scenes.length
+      });
+      addLog("script_ready_waiting_for_render", "התסריט מוכן. כדי לאסוף מדיה, מוסיקה וליצור וידאו צריך ללחוץ שליחה לרינדור.", {
+        projectId: createdProject.id,
+        nextAction: "click_render_project"
       });
       if (createdProject.operationLogs?.length) {
         setActionLogs((current) => [...createdProject.operationLogs!.reverse(), ...current].slice(0, 80));
@@ -311,6 +316,51 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function downloadDiagnosticReport() {
+    setDiagnosticMessage("");
+    const latestLogs = project
+      ? await apiGet<AuditLog[]>(`/projects/${project.id}/logs`).catch(() => renderLogs)
+      : renderLogs;
+    const latestProject = project
+      ? await apiGet<Project>(`/projects/${project.id}`).catch(() => project)
+      : undefined;
+    const latestJob = latestProject?.renderJobs
+      ?.slice()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+    const report = {
+      generatedAt: new Date().toISOString(),
+      currentUrl: window.location.href,
+      currentStatus: buildCurrentStatus({
+        busy,
+        project: latestProject,
+        latestRenderJob: latestJob,
+        actionLogs,
+        renderLogs: latestLogs
+      }),
+      diagnosisHint: buildDiagnosisHint(latestProject, latestJob, latestLogs),
+      form,
+      project: latestProject,
+      latestRenderJob: latestJob,
+      actionLogs,
+      renderLogs: latestLogs
+    };
+    const blob = new window.Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `adbot-diagnostic-${latestProject?.id ?? "no-project"}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    setDiagnosticMessage("דו״ח התקלה ירד למחשב. אפשר לשלוח אותו כאן בצ׳אט.");
+    addLog("diagnostic_report_downloaded", "הורד דו״ח תקלה לשליחה לתמיכה", {
+      projectId: latestProject?.id,
+      renderLogCount: latestLogs.length,
+      actionLogCount: actionLogs.length
+    });
   }
 
   const latestRenderJob = project?.renderJobs
@@ -411,6 +461,14 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         </div>
       </div>
       <CurrentOperationPanel status={currentStatus} />
+      <div className="panel diagnostic-panel">
+        <div>
+          <h3>דו״ח תקלה</h3>
+          <p className="muted">אם התהליך נתקע, הורד דו״ח ושלח אותו כאן. הוא כולל סטטוס פרויקט, סצנות, jobs ולוגים, ללא מפתחות API.</p>
+        </div>
+        <button className="secondary" onClick={() => void downloadDiagnosticReport()}>הורדת דו״ח תקלה</button>
+        {diagnosticMessage && <p className="notice">{diagnosticMessage}</p>}
+      </div>
       {project && (
         <div className="panel">
           <div className="log-header">
@@ -574,6 +632,35 @@ function buildCurrentStatus(input: {
     status: "IDLE",
     providerMessages
   };
+}
+
+function buildDiagnosisHint(project?: Project, latestRenderJob?: RenderJob, renderLogs: AuditLog[] = []) {
+  if (!project) {
+    return "No project exists in the current create screen.";
+  }
+
+  if (project.status === "SCRIPT_READY" && !latestRenderJob) {
+    return "Script is ready but rendering has not started yet. Click 'שליחה לרינדור' to collect media/music and start video generation.";
+  }
+
+  if (latestRenderJob?.status === "QUEUED") {
+    return "Render job is queued. Check whether the worker service is running.";
+  }
+
+  if (latestRenderJob?.status === "RUNNING") {
+    const latestLog = renderLogs[0];
+    return `Render is running at stage '${latestRenderJob.stage}'. Latest server log: ${latestLog?.action ?? "none"}.`;
+  }
+
+  if (latestRenderJob?.status === "FAILED") {
+    return `Render failed: ${latestRenderJob.error ?? "no error message"}`;
+  }
+
+  if (latestRenderJob?.status === "COMPLETED") {
+    return "Render completed. Check outputUrl and scene clipUrl values.";
+  }
+
+  return `Project status is ${project.status}.`;
 }
 
 function shouldShowAsProviderMessage(step: string) {
