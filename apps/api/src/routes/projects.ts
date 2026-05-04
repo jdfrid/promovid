@@ -175,12 +175,209 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: { ...project, operationLogs } };
   });
 
+  app.post("/projects/:projectId/analyze-script", async (request, reply) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const operationLogs: OperationLog[] = [];
+    const logOperation = createOperationLogger(request.log, operationLogs);
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: params.projectId, tenantId: tenant.id },
+      include: { scenes: { orderBy: { order: "asc" } } }
+    });
+
+    await prisma.project.update({
+      where: { id: project.id },
+      data: { status: "SCRIPT_ANALYZING" }
+    });
+    logOperation("script_analysis_started", "מתחיל ניתוח חכם של התסריט, הדיאלוג, הוויזואל והמוסיקה", { projectId: project.id });
+
+    try {
+      const scriptProviders = dedupeProvidersByName(await prisma.providerCredential.findMany({
+        where: { tenantId: tenant.id, type: "SCRIPT", enabled: true },
+        orderBy: { priority: "asc" }
+      }));
+      const analysis = await analyzeScriptWithFailover({
+        title: project.title,
+        sourceText: project.sourceText,
+        mode: project.mode as z.infer<typeof createProjectSchema>["mode"],
+        duration: project.duration,
+        style: project.style ?? undefined,
+        targetAudience: project.targetAudience ?? undefined,
+        aspectRatio: project.aspectRatio as z.infer<typeof createProjectSchema>["aspectRatio"],
+        scenes: project.scenes.map((scene) => ({
+          title: scene.title,
+          narration: scene.narration,
+          visualPrompt: scene.visualPrompt,
+          durationSeconds: scene.durationSeconds
+        }))
+      }, scriptProviders, logOperation);
+
+      const updated = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          status: "SCRIPT_ANALYSIS_READY",
+          scriptAnalysis: analysis as unknown as Prisma.InputJsonValue,
+          backgroundVideoPrompt: analysis.backgroundVideoPrompt || project.backgroundVideoPrompt,
+          musicPrompt: analysis.musicPrompt || project.musicPrompt
+        },
+        include: { scenes: { orderBy: { order: "asc" } }, renderJobs: { orderBy: { createdAt: "desc" } } }
+      });
+      logOperation("script_analysis_completed", "ניתוח התסריט הסתיים ונשמר", {
+        projectId: project.id,
+        sceneCount: analysis.scenes.length,
+        characterCount: analysis.characters.length
+      });
+      await writeAuditLogs(tenant.id, operationLogs, project.id);
+      return { data: { ...updated, operationLogs } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Script analysis failed";
+      logOperation("script_analysis_failed", "ניתוח התסריט נכשל", { error: message });
+      await writeAuditLogs(tenant.id, operationLogs, project.id);
+      await prisma.project.update({ where: { id: project.id }, data: { status: "FAILED" } });
+      reply.code(500);
+      return { error: message, operationLogs };
+    }
+  });
+
+  app.post("/projects/:projectId/collect-assets", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const operationLogs: OperationLog[] = [];
+    const logOperation = createOperationLogger(request.log, operationLogs);
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: params.projectId, tenantId: tenant.id },
+      include: { scenes: { orderBy: { order: "asc" } } }
+    });
+
+    await prisma.project.update({ where: { id: project.id }, data: { status: "ASSETS_COLLECTING" } });
+    logOperation("asset_collection_started", "מתחיל איסוף חומרים לפי ניתוח התסריט", { projectId: project.id, sceneCount: project.scenes.length });
+
+    const providers = await prisma.providerCredential.findMany({
+      where: { tenantId: tenant.id, type: { in: ["MEDIA", "VOICE", "MUSIC"] }, enabled: true },
+      orderBy: [{ type: "asc" }, { priority: "asc" }]
+    });
+    const providersByType = {
+      MEDIA: providers.filter((provider) => provider.type === "MEDIA"),
+      VOICE: providers.filter((provider) => provider.type === "VOICE"),
+      MUSIC: providers.filter((provider) => provider.type === "MUSIC")
+    };
+
+    for (const scene of project.scenes) {
+      logOperation("scene_asset_collection_started", "מתחיל איסוף חומרים לסצנה", { sceneId: scene.id, sceneOrder: scene.order + 1 });
+      const assets = await collectSceneAssets(scene, providersByType, {
+        backgroundVideoPrompt: project.backgroundVideoPrompt,
+        musicPrompt: project.musicPrompt
+      });
+      for (const assetLog of assets.log) {
+        logOperation(assetLog.step, assetLog.message, assetLog.metadata);
+      }
+      await prisma.scene.update({
+        where: { id: scene.id },
+        data: {
+          mediaUrl: assets.mediaUrl,
+          referenceMediaUrl: assets.mediaUrl,
+          voiceUrl: assets.voiceUrl,
+          musicUrl: assets.musicUrl,
+          renderLog: { assetCollection: assets.log } as Prisma.InputJsonValue
+        }
+      });
+      logOperation("scene_asset_collection_completed", "איסוף החומרים לסצנה הסתיים", {
+        sceneId: scene.id,
+        hasMedia: Boolean(assets.mediaUrl),
+        hasVoice: Boolean(assets.voiceUrl),
+        hasMusic: Boolean(assets.musicUrl)
+      });
+    }
+
+    const refreshed = await prisma.project.findUniqueOrThrow({
+      where: { id: project.id },
+      include: { scenes: { orderBy: { order: "asc" } }, renderJobs: { orderBy: { createdAt: "desc" } } }
+    });
+    const materialLibrary = buildMaterialLibrary(refreshed, refreshed.scriptAnalysis);
+    const updated = await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        status: "ASSETS_READY",
+        materialLibrary: materialLibrary as Prisma.InputJsonValue
+      },
+      include: { scenes: { orderBy: { order: "asc" } }, renderJobs: { orderBy: { createdAt: "desc" } } }
+    });
+    logOperation("asset_collection_completed", "ספריית החומרים נבנתה ונשמרה", { projectId: project.id });
+    await writeAuditLogs(tenant.id, operationLogs, project.id);
+    return { data: { ...updated, operationLogs } };
+  });
+
+  app.post("/projects/:projectId/render-package", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const operationLogs: OperationLog[] = [];
+    const logOperation = createOperationLogger(request.log, operationLogs);
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: params.projectId, tenantId: tenant.id },
+      include: { scenes: { orderBy: { order: "asc" } } }
+    });
+
+    await prisma.project.update({ where: { id: project.id }, data: { status: "RENDER_PACKAGE_BUILDING" } });
+    logOperation("render_package_started", "מתחיל בניית חבילת רינדור עם manifest, instructions ו-timeline", { projectId: project.id });
+    const renderPackage = await buildAndStoreRenderPackage({ tenantId: tenant.id, project });
+    const updated = await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        status: "RENDER_PACKAGE_READY",
+        renderPackage: renderPackage as unknown as Prisma.InputJsonValue
+      },
+      include: { scenes: { orderBy: { order: "asc" } }, renderJobs: { orderBy: { createdAt: "desc" } } }
+    });
+    logOperation("render_package_completed", "חבילת הרינדור מוכנה לאישור", {
+      projectId: project.id,
+      missingAssetGroups: renderPackage.missingAssets.length,
+      files: renderPackage.files
+    });
+    await writeAuditLogs(tenant.id, operationLogs, project.id);
+    return { data: { ...updated, operationLogs } };
+  });
+
+  app.post("/projects/:projectId/approve-render-package", async (request) => {
+    const params = z.object({ projectId: z.string() }).parse(request.params);
+    const tenant = await getDemoTenant();
+    const project = await prisma.project.findFirstOrThrow({
+      where: { id: params.projectId, tenantId: tenant.id }
+    });
+    if (!project.renderPackage) {
+      throw new Error("יש לבנות חבילת חומרים לפני אישור רינדור");
+    }
+
+    const updated = await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        status: "RENDER_PACKAGE_APPROVED",
+        renderPackageApprovedAt: new Date()
+      },
+      include: { scenes: { orderBy: { order: "asc" } }, renderJobs: { orderBy: { createdAt: "desc" } } }
+    });
+    await prisma.auditLog.create({
+      data: {
+        tenantId: tenant.id,
+        action: "render_package_approved",
+        entity: "Project",
+        entityId: project.id,
+        metadata: { message: "המשתמש אישר מעבר לשלב הרינדור", at: new Date().toISOString() }
+      }
+    });
+    return { data: updated };
+  });
+
   app.post("/projects/:projectId/render", async (request, reply) => {
     const params = z.object({ projectId: z.string() }).parse(request.params);
     const tenant = await getDemoTenant();
     const project = await prisma.project.findFirstOrThrow({
       where: { id: params.projectId, tenantId: tenant.id }
     });
+
+    if (project.status !== "RENDER_PACKAGE_APPROVED" || !project.renderPackageApprovedAt) {
+      reply.code(409);
+      return { error: "יש להשלים ולאשר חבילת חומרים לפני רינדור" };
+    }
 
     const renderJob = await prisma.renderJob.create({
       data: {
@@ -260,6 +457,70 @@ async function generateScriptWithFailover(
   }
 
   throw new Error(`All active SCRIPT providers failed. ${errors.join(" | ")}`);
+}
+
+async function analyzeScriptWithFailover(
+  input: z.infer<typeof createProjectSchema> & { scenes: Array<{ title: string; narration: string; visualPrompt: string; durationSeconds: number }> },
+  scriptProviders: Awaited<ReturnType<typeof prisma.providerCredential.findMany>>,
+  logOperation: (step: string, message: string, metadata?: Record<string, unknown>) => void
+) {
+  if (scriptProviders.length === 0) {
+    return analyzeScript({ ...input, onLog: logOperation, provider: null });
+  }
+
+  const errors: string[] = [];
+  for (const provider of scriptProviders) {
+    logOperation("script_analysis_provider_attempt_start", "מנסה לנתח את התסריט עם ספק", {
+      provider: provider.provider,
+      priority: provider.priority,
+      hasKey: Boolean(provider.encryptedKey)
+    });
+
+    try {
+      const analysis = await analyzeScript({
+        ...input,
+        onLog: logOperation,
+        provider: {
+          provider: provider.provider,
+          apiKey: provider.encryptedKey ? decryptSecret(provider.encryptedKey) : undefined,
+          config: provider.config
+        }
+      });
+      logOperation("script_analysis_provider_attempt_success", "ספק הניתוח החזיר תיק הפקה תקין", {
+        provider: provider.provider,
+        sceneCount: analysis.scenes.length,
+        characterCount: analysis.characters.length
+      });
+      return analysis;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown provider error";
+      if (!errors.includes(message)) {
+        errors.push(message);
+      }
+      logOperation("script_analysis_provider_attempt_failed", "ספק ניתוח התסריט נכשל, ממשיך לספק הבא אם קיים", {
+        provider: provider.provider,
+        error: message
+      });
+    }
+  }
+
+  throw new Error(`All active SCRIPT analysis providers failed. ${errors.join(" | ")}`);
+}
+
+function createOperationLogger(
+  requestLog: { info: (obj: unknown, message: string) => void },
+  operationLogs: OperationLog[]
+) {
+  return (step: string, message: string, metadata?: Record<string, unknown>) => {
+    const entry = {
+      at: new Date().toISOString(),
+      step,
+      message,
+      metadata
+    };
+    operationLogs.push(entry);
+    requestLog.info({ step, metadata }, message);
+  };
 }
 
 function dedupeProvidersByName<T extends { provider: string }>(providers: T[]) {
