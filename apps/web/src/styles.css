@@ -216,6 +216,25 @@ td {
   padding: 8px 14px;
 }
 
+.stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.json-block {
+  display: block;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre-wrap;
+  direction: ltr;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.24);
+  border-radius: 14px;
+  padding: 14px;
+}
+
 .service-tabs {
   display: flex;
   gap: 8px;

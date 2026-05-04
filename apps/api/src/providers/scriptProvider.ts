@@ -33,6 +33,36 @@ export interface ScriptGenerationResult {
   musicPrompt?: string;
 }
 
+export interface ScriptAnalysisResult {
+  summary: string;
+  visualDirection: string;
+  backgroundVideoPrompt: string;
+  musicPrompt: string;
+  characters: Array<{
+    name: string;
+    role: string;
+    avatarPrompt: string;
+    voicePrompt: string;
+  }>;
+  scenes: Array<{
+    order: number;
+    title: string;
+    visualRequirements: string;
+    backgroundPrompt: string;
+    avatarPrompt?: string;
+    voicePrompt: string;
+    musicPrompt: string;
+    timeline: Array<{
+      startSecond: number;
+      endSecond: number;
+      action: string;
+      dialogue?: string;
+      speaker?: string;
+      requiredAssets: string[];
+    }>;
+  }>;
+}
+
 export async function generateScript(request: ScriptRequest): Promise<ScriptGenerationResult> {
   const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
   if (request.provider) {
@@ -64,6 +94,23 @@ export async function generateScript(request: ScriptRequest): Promise<ScriptGene
   };
 }
 
+export async function analyzeScript(request: ScriptRequest & { scenes: SceneInput[] }): Promise<ScriptAnalysisResult> {
+  const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
+  if (request.provider) {
+    if (!request.provider.apiKey) {
+      throw new Error(`Script analysis provider ${request.provider.provider} is enabled but has no API key.`);
+    }
+
+    if (request.provider.provider.toLowerCase().includes("gemini")) {
+      return analyzeWithGemini(request, request.provider, sourceContext);
+    }
+
+    throw new Error(`Script analysis provider ${request.provider.provider} is not implemented yet.`);
+  }
+
+  return buildFallbackScriptAnalysis(request);
+}
+
 function buildNarration(source: string, index: number, total: number, style: string, audience: string) {
   if (index === 0) {
     return `Meet ${source}. A fast way to catch attention for ${audience}.`;
@@ -74,6 +121,62 @@ function buildNarration(source: string, index: number, total: number, style: str
   }
 
   return `${source} helps turn interest into action with a concise benefit-driven story.`;
+}
+
+async function analyzeWithGemini(
+  request: ScriptRequest & { scenes: SceneInput[] },
+  provider: ScriptProviderSettings,
+  sourceContext: SourceContext
+): Promise<ScriptAnalysisResult> {
+  const model = normalizeGeminiModel(readConfigValue(provider.config, "analysisModel") ?? readConfigValue(provider.config, "model") ?? "gemini-2.5-flash-lite");
+  const prompt = buildGeminiAnalysisPrompt(request, sourceContext);
+  request.onLog?.("gemini_analysis_prompt_ready", "נבנה prompt לניתוח חכם של התסריט וחומרי ההפקה", {
+    model,
+    promptLength: prompt.length,
+    sceneCount: request.scenes.length
+  });
+  request.onLog?.("gemini_analysis_request_start", "שולח בקשה ל-Gemini לניתוח תסריט וחומרים", { model });
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(provider.apiKey ?? "")}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: Number(readConfigValue(provider.config, "temperature") ?? 0.45),
+          responseMimeType: "application/json"
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const readableError = formatGeminiError(errorText, response.status, model);
+    request.onLog?.("gemini_analysis_request_failed", "Gemini החזיר שגיאה בניתוח התסריט", {
+      status: response.status,
+      error: readableError
+    });
+    throw new Error(readableError);
+  }
+
+  const payload = (await response.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
+  request.onLog?.("gemini_analysis_response_received", "התקבל ניתוח חכם מ-Gemini", { responseLength: text.length });
+  const analysis = normalizeScriptAnalysis(parseAnalysisResponse(text), request);
+  request.onLog?.("gemini_analysis_response_parsed", "ניתוח התסריט פוענח לדרישות חומרים ולו״ז", {
+    characterCount: analysis.characters.length,
+    sceneCount: analysis.scenes.length
+  });
+  return analysis;
 }
 
 async function generateGeminiScript(
@@ -189,6 +292,178 @@ ${sourceContext.rawInput}
 - אין להשתמש במשפטים כלליים כמו "Meet..." אם אינם מתאימים לשפה ולמוצר.
 - אם הקלט בעברית, כתוב את הקריינות בעברית.
 `.trim();
+}
+
+function buildGeminiAnalysisPrompt(request: ScriptRequest & { scenes: SceneInput[] }, sourceContext: SourceContext) {
+  return `
+אתה מנהל Pre-Production חכם לסרטוני פרסומת.
+
+המטרה:
+נתח את בקשת המשתמש ואת התסריט, ובנה מפרט הפקה מלא לאיסוף חומרים ולרינדור עתידי.
+התוצר שלך ישמש לחיפוש מדיה, אווטרים, קול/דיבוב ומוסיקה, ולאחר מכן לבניית prompt למחולל וידאו.
+
+פרטי הפרויקט:
+- כותרת: ${request.title}
+- אורך כולל: ${request.duration} שניות
+- יחס תצוגה: ${request.aspectRatio ?? "9:16"}
+- סגנון: ${request.style || "לא הוגדר"}
+- קהל יעד: ${request.targetAudience || "לא הוגדר"}
+- URL: ${sourceContext.url || "לא סופק"}
+
+הוראות המשתמש:
+${sourceContext.instructions || sourceContext.rawInput}
+
+תוכן שחולץ מהעמוד:
+${sourceContext.pageText || sourceContext.fetchError || "לא זמין"}
+
+התסריט:
+${JSON.stringify(request.scenes, null, 2)}
+
+החזר JSON בלבד במבנה הבא:
+{
+  "summary": "Production summary in Hebrew",
+  "visualDirection": "English visual direction for the whole ad",
+  "backgroundVideoPrompt": "English search prompt for overall background/reference media",
+  "musicPrompt": "English search prompt for background music mood, tempo and genre",
+  "characters": [
+    {
+      "name": "Speaker 1",
+      "role": "young presenter",
+      "avatarPrompt": "English avatar description",
+      "voicePrompt": "English voice direction"
+    }
+  ],
+  "scenes": [
+    {
+      "order": 0,
+      "title": "Scene title",
+      "visualRequirements": "English concrete visual requirements",
+      "backgroundPrompt": "English media search prompt for this scene",
+      "avatarPrompt": "English avatar prompt if relevant",
+      "voicePrompt": "English voice/TTS direction for this scene",
+      "musicPrompt": "English music direction for this scene",
+      "timeline": [
+        {
+          "startSecond": 0,
+          "endSecond": 3,
+          "action": "What must happen visually",
+          "dialogue": "Exact spoken text if any",
+          "speaker": "Speaker 1",
+          "requiredAssets": ["backgroundVideo", "voice", "music"]
+        }
+      ]
+    }
+  ]
+}
+
+דרישות:
+- לפרק כל סצנה ללו״ז פנימי של רגעים קצרים.
+- אם יש דיאלוג, לזהות דוברים ולהפיק voicePrompt נפרד.
+- אם אין דיאלוג, להגדיר קריינות/voiceover.
+- prompts לחיפוש מדיה/מוסיקה/אווטרים יהיו באנגלית, קונקרטיים, לא כלליים.
+- אל תמציא פרטי מוצר שלא קיימים בקלט; במקום זאת תאר את ההפקה סביב המסר הקיים.
+`.trim();
+}
+
+function parseAnalysisResponse(text: string): Partial<ScriptAnalysisResult> {
+  const cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+  return JSON.parse(cleaned) as Partial<ScriptAnalysisResult>;
+}
+
+function normalizeScriptAnalysis(
+  parsed: Partial<ScriptAnalysisResult>,
+  request: ScriptRequest & { scenes: SceneInput[] }
+): ScriptAnalysisResult {
+  const fallback = buildFallbackScriptAnalysis(request);
+  return {
+    summary: parsed.summary || fallback.summary,
+    visualDirection: parsed.visualDirection || fallback.visualDirection,
+    backgroundVideoPrompt: parsed.backgroundVideoPrompt || fallback.backgroundVideoPrompt,
+    musicPrompt: parsed.musicPrompt || fallback.musicPrompt,
+    characters: Array.isArray(parsed.characters) && parsed.characters.length ? parsed.characters.map((character, index) => ({
+      name: character.name || `Speaker ${index + 1}`,
+      role: character.role || "presenter",
+      avatarPrompt: character.avatarPrompt || "friendly commercial presenter avatar",
+      voicePrompt: character.voicePrompt || "clear energetic commercial voice"
+    })) : fallback.characters,
+    scenes: request.scenes.map((scene, index) => {
+      const parsedScene = parsed.scenes?.find((item) => item.order === index) ?? parsed.scenes?.[index];
+      return {
+        order: index,
+        title: parsedScene?.title || scene.title,
+        visualRequirements: parsedScene?.visualRequirements || scene.visualPrompt,
+        backgroundPrompt: parsedScene?.backgroundPrompt || scene.visualPrompt,
+        avatarPrompt: parsedScene?.avatarPrompt,
+        voicePrompt: parsedScene?.voicePrompt || "clear commercial voiceover matching the narration",
+        musicPrompt: parsedScene?.musicPrompt || fallback.musicPrompt,
+        timeline: normalizeTimeline(parsedScene?.timeline, scene, index)
+      };
+    })
+  };
+}
+
+function buildFallbackScriptAnalysis(request: ScriptRequest & { scenes: SceneInput[] }): ScriptAnalysisResult {
+  const style = request.style || "modern commercial";
+  const audience = request.targetAudience || "general audience";
+  return {
+    summary: `תיק הפקה בסיסי עבור ${request.title}, מיועד ל-${audience}.`,
+    visualDirection: `${style}, clean product-focused commercial, vertical social media video`,
+    backgroundVideoPrompt: `${request.title} ${style} product lifestyle background`,
+    musicPrompt: `${style} upbeat commercial background music`,
+    characters: [
+      {
+        name: "Narrator",
+        role: "commercial narrator",
+        avatarPrompt: `${style} friendly presenter avatar for ${audience}`,
+        voicePrompt: `clear energetic voiceover for ${audience}`
+      }
+    ],
+    scenes: request.scenes.map((scene, index) => ({
+      order: index,
+      title: scene.title,
+      visualRequirements: scene.visualPrompt,
+      backgroundPrompt: scene.visualPrompt,
+      avatarPrompt: `${style} presenter avatar reacting to ${scene.title}`,
+      voicePrompt: `voiceover says: ${scene.narration}`,
+      musicPrompt: `${style} background music under narration`,
+      timeline: normalizeTimeline(undefined, scene, index)
+    }))
+  };
+}
+
+function normalizeTimeline(
+  timeline: ScriptAnalysisResult["scenes"][number]["timeline"] | undefined,
+  scene: SceneInput,
+  sceneIndex: number
+) {
+  if (Array.isArray(timeline) && timeline.length > 0) {
+    return timeline.map((item, index) => ({
+      startSecond: Number.isFinite(Number(item.startSecond)) ? Number(item.startSecond) : index * 2,
+      endSecond: Number.isFinite(Number(item.endSecond)) ? Number(item.endSecond) : Math.min(scene.durationSeconds, index * 2 + 2),
+      action: item.action || scene.visualPrompt,
+      dialogue: item.dialogue,
+      speaker: item.speaker,
+      requiredAssets: Array.isArray(item.requiredAssets) && item.requiredAssets.length ? item.requiredAssets : ["backgroundVideo", "voice", "music"]
+    }));
+  }
+
+  const mid = Math.max(1, Math.floor(scene.durationSeconds / 2));
+  return [
+    {
+      startSecond: sceneIndex === 0 ? 0 : 0,
+      endSecond: mid,
+      action: scene.visualPrompt,
+      dialogue: scene.narration,
+      speaker: "Narrator",
+      requiredAssets: ["backgroundVideo", "voice", "music"]
+    },
+    {
+      startSecond: mid,
+      endSecond: scene.durationSeconds,
+      action: `Continue the visual action for ${scene.title} and prepare transition to the next scene`,
+      requiredAssets: ["backgroundVideo", "music"]
+    }
+  ];
 }
 
 async function buildSourceContext(rawInput: string, onLog?: OperationLogger): Promise<SourceContext> {

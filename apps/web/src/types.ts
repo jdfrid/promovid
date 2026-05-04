@@ -37,6 +37,10 @@ export interface Project {
   aspectRatio: string;
   backgroundVideoPrompt?: string | null;
   musicPrompt?: string | null;
+  scriptAnalysis?: Record<string, unknown> | null;
+  materialLibrary?: Record<string, unknown> | null;
+  renderPackage?: Record<string, unknown> | null;
+  renderPackageApprovedAt?: string | null;
   status: string;
   scenes: Scene[];
   renderJobs?: RenderJob[];

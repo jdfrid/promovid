@@ -1,10 +1,13 @@
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { renderQueue } from "../queue.js";
-import { generateScript } from "../providers/scriptProvider.js";
+import { analyzeScript, generateScript } from "../providers/scriptProvider.js";
+import { collectSceneAssets } from "../providers/assetProvider.js";
 import { decryptSecret } from "../crypto.js";
 import { processRenderJob } from "../worker.js";
+import { buildAndStoreRenderPackage, buildMaterialLibrary } from "../render/renderPackageService.js";
 
 const tenantSlug = "demo";
 

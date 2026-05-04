@@ -5,7 +5,7 @@ import { apiGet, apiPatch, apiPost, absoluteAssetUrl } from "./api";
 import type { Asset, AuditLog, Project, Provider, RenderJob } from "./types";
 import "./styles.css";
 
-type Section = "dashboard" | "create" | "assets" | "settings";
+type Section = "dashboard" | "preproduction" | "renderStudio" | "assets" | "settings";
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
   state: { error?: Error } = {};
@@ -67,7 +67,7 @@ function App() {
 
   function openProject(projectId: string) {
     setSelectedProjectId(projectId);
-    setSection("create");
+    setSection("preproduction");
   }
 
   return (
@@ -79,17 +79,19 @@ function App() {
         </div>
         <nav>
           <button className={section === "dashboard" ? "active" : ""} onClick={() => setSection("dashboard")}>Dashboard</button>
-          <button className={section === "create" ? "active" : ""} onClick={() => {
+          <button className={section === "preproduction" ? "active" : ""} onClick={() => {
             setSelectedProjectId(undefined);
-            setSection("create");
-          }}>יצירה</button>
+            setSection("preproduction");
+          }}>Pre‑Production</button>
+          <button className={section === "renderStudio" ? "active" : ""} onClick={() => setSection("renderStudio")}>Render Studio</button>
           <button className={section === "assets" ? "active" : ""} onClick={() => setSection("assets")}>מאגר חומרים</button>
           <button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>הגדרות</button>
         </nav>
       </aside>
       <main>
         {section === "dashboard" && <Dashboard onOpenProject={openProject} />}
-        {section === "create" && <CreateVideo selectedProjectId={selectedProjectId} />}
+        {section === "preproduction" && <CreateVideo selectedProjectId={selectedProjectId} />}
+        {section === "renderStudio" && <RenderStudio />}
         {section === "assets" && <Assets />}
         {section === "settings" && <Settings />}
       </main>
@@ -245,7 +247,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
       });
       addLog("script_ready_waiting_for_render", "התסריט מוכן. כדי לאסוף מדיה, מוסיקה וליצור וידאו צריך ללחוץ שליחה לרינדור.", {
         projectId: createdProject.id,
-        nextAction: "click_render_project"
+        nextAction: "analyze_script"
       });
       if (createdProject.operationLogs?.length) {
         setActionLogs((current) => [...createdProject.operationLogs!.reverse(), ...current].slice(0, 80));
@@ -257,6 +259,70 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function runProjectStage(path: string, startedStep: string, startedMessage: string, completedStep: string, completedMessage: string) {
+    if (!project) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    addLog(startedStep, startedMessage, { projectId: project.id });
+    try {
+      const updatedProject = await apiPost<Project & { operationLogs?: OperationLog[] }>(`/projects/${project.id}/${path}`);
+      setProject(updatedProject);
+      addLog(completedStep, completedMessage, { projectId: updatedProject.id, status: updatedProject.status });
+      if (updatedProject.operationLogs?.length) {
+        setActionLogs((current) => [...updatedProject.operationLogs!.reverse(), ...current].slice(0, 80));
+      }
+      await refreshProject(updatedProject.id);
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : "הפעולה נכשלה";
+      setError(message);
+      addLog(`${startedStep}_failed`, "הפעולה נכשלה", { error: message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function analyzeProject() {
+    return runProjectStage(
+      "analyze-script",
+      "script_analysis_clicked",
+      "נלחץ כפתור ניתוח תסריט חכם",
+      "script_analysis_ready",
+      "ניתוח התסריט מוכן"
+    );
+  }
+
+  function collectAssets() {
+    return runProjectStage(
+      "collect-assets",
+      "collect_assets_clicked",
+      "נלחץ כפתור איסוף חומרים",
+      "assets_ready",
+      "ספריית החומרים מוכנה"
+    );
+  }
+
+  function buildRenderPackage() {
+    return runProjectStage(
+      "render-package",
+      "render_package_clicked",
+      "נלחץ כפתור בניית חבילת רינדור",
+      "render_package_ready",
+      "חבילת הרינדור מוכנה לאישור"
+    );
+  }
+
+  function approveRenderPackage() {
+    return runProjectStage(
+      "approve-render-package",
+      "approve_render_package_clicked",
+      "נלחץ כפתור אישור מעבר לרינדור",
+      "render_package_approved",
+      "חבילת הרינדור אושרה"
+    );
   }
 
   async function renderProject() {
@@ -340,6 +406,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         renderLogs: latestLogs
       }),
       diagnosisHint: buildDiagnosisHint(latestProject, latestJob, latestLogs),
+      stageBreakdown: buildStageBreakdown(latestProject, latestJob),
       form,
       project: latestProject,
       latestRenderJob: latestJob,
@@ -373,13 +440,13 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     actionLogs,
     renderLogs
   });
-  const steps = ["תסריט", "מדיה", "קול", "הגדרות", "יצירה"];
+  const steps = ["בקשה", "תסריט", "ניתוח", "חומרים", "חבילת רינדור", "אישור"];
 
   return (
     <section>
       <div className="page-title">
-        <p className="eyebrow">5 שלבים</p>
-        <h2>יצירת סרטון</h2>
+        <p className="eyebrow">Pre‑Production</p>
+        <h2>תסריט, ניתוח ואיסוף חומרים</h2>
       </div>
       <div className="steps">{steps.map((step) => <span key={step}>{step}</span>)}</div>
       <div className="two-col">
@@ -414,8 +481,36 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
           {error && <p className="notice error-notice">{error}</p>}
         </div>
         <div className="panel">
-          <h3>תסריט וסצנות</h3>
+          <h3>תסריט, ניתוח וחבילת חומרים</h3>
           {!project && <p className="muted">לאחר יצירת התסריט יוצגו כאן סצנות של 7-8 שניות.</p>}
+          {project && (
+            <div className="stage-actions">
+              <button className="secondary" disabled={busy || !["SCRIPT_READY", "SCRIPT_ANALYSIS_READY", "ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void analyzeProject()}>
+                ניתוח תסריט חכם
+              </button>
+              <button className="secondary" disabled={busy || !["SCRIPT_ANALYSIS_READY", "ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void collectAssets()}>
+                איסוף חומרים
+              </button>
+              <button className="secondary" disabled={busy || !["ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void buildRenderPackage()}>
+                בניית חבילת רינדור
+              </button>
+              <button className="primary" disabled={busy || project.status !== "RENDER_PACKAGE_READY"} onClick={() => void approveRenderPackage()}>
+                אישור מעבר לרינדור
+              </button>
+            </div>
+          )}
+          {project?.scriptAnalysis && (
+            <details className="scene-details" open>
+              <summary>ניתוח חכם של התסריט</summary>
+              <code>{JSON.stringify(project.scriptAnalysis, null, 2)}</code>
+            </details>
+          )}
+          {project?.renderPackage && (
+            <details className="scene-details" open>
+              <summary>חבילת רינדור מוכנה</summary>
+              <code>{JSON.stringify(project.renderPackage, null, 2)}</code>
+            </details>
+          )}
           {project?.backgroundVideoPrompt && (
             <article className="scene prompt-card">
               <strong>סרטון רקע מומלץ</strong>
@@ -455,7 +550,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
               </div>
             </article>
           ))}
-          {project && <button className="primary" disabled={busy || project.status === "RENDERING"} onClick={renderProject}>
+          {project && <button className="primary" disabled={busy || project.status !== "RENDER_PACKAGE_APPROVED"} onClick={renderProject}>
             {project.status === "RENDERING" ? "מרנדר..." : "שליחה לרינדור"}
           </button>}
         </div>
@@ -626,6 +721,17 @@ function buildCurrentStatus(input: {
     };
   }
 
+  const projectStage = projectStatusToOperation(input.project?.status);
+  if (projectStage) {
+    return {
+      stageLabel: projectStage.label,
+      startedAt: input.actionLogs.at(-1)?.at,
+      progress: projectStage.progress,
+      status: input.project?.status ?? "IDLE",
+      providerMessages
+    };
+  }
+
   return {
     stageLabel: "ממתין להתחלה",
     progress: 0,
@@ -640,7 +746,23 @@ function buildDiagnosisHint(project?: Project, latestRenderJob?: RenderJob, rend
   }
 
   if (project.status === "SCRIPT_READY" && !latestRenderJob) {
-    return "Script is ready but rendering has not started yet. Click 'שליחה לרינדור' to collect media/music and start video generation.";
+    return "Script is ready. Next step: run smart script analysis in Pre-Production.";
+  }
+
+  if (project.status === "SCRIPT_ANALYSIS_READY") {
+    return "Script analysis is ready. Next step: collect assets for media, voice, avatars and music.";
+  }
+
+  if (project.status === "ASSETS_READY") {
+    return "Assets are ready. Next step: build the render package with manifest, instructions and timeline.";
+  }
+
+  if (project.status === "RENDER_PACKAGE_READY") {
+    return "Render package is ready. Next step: approve it manually before Render Studio can start rendering.";
+  }
+
+  if (project.status === "RENDER_PACKAGE_APPROVED" && !latestRenderJob) {
+    return "Render package is approved. Open Render Studio and click render.";
   }
 
   if (latestRenderJob?.status === "QUEUED") {
@@ -668,9 +790,12 @@ function shouldShowAsProviderMessage(step: string) {
     "gemini",
     "source_url",
     "script_provider",
+    "script_analysis",
     "media_provider",
     "voice_provider",
     "music_provider",
+    "asset_collection",
+    "render_package",
     "video_prompt",
     "video_provider",
     "scene_assets",
@@ -685,6 +810,9 @@ function renderStageLabel(stage: string) {
   if (stage.startsWith("scene_") && stage.endsWith("_assets")) {
     return `שליפת מדיה ומרכיבים · ${stage.replace("scene_", "סצנה ").replace("_assets", "")}`;
   }
+  if (stage.startsWith("scene_") && stage.endsWith("_package_assets")) {
+    return `קריאת חבילת חומרים · ${stage.replace("scene_", "סצנה ").replace("_package_assets", "")}`;
+  }
   if (stage.startsWith("scene_") && stage.endsWith("_render")) {
     return `רינדור קליפ · ${stage.replace("scene_", "סצנה ").replace("_render", "")}`;
   }
@@ -694,12 +822,167 @@ function renderStageLabel(stage: string) {
 
   const labels: Record<string, string> = {
     collect_assets: "שליפת מדיה, קול ומוסיקה",
+    inline_rescue: "עיבוד ישיר משירות web",
     render: "רינדור סרטון",
     merge_final_video: "איחוד הסרטון הסופי",
     completed: "הושלם"
   };
 
   return labels[stage] ?? stage;
+}
+
+function projectStatusToOperation(status?: string) {
+  const statuses: Record<string, { label: string; progress: number }> = {
+    SCRIPT_ANALYZING: { label: "ניתוח תסריט חכם", progress: 45 },
+    SCRIPT_ANALYSIS_READY: { label: "ניתוח תסריט מוכן", progress: 55 },
+    ASSETS_COLLECTING: { label: "איסוף חומרים", progress: 65 },
+    ASSETS_READY: { label: "ספריית חומרים מוכנה", progress: 75 },
+    RENDER_PACKAGE_BUILDING: { label: "בניית חבילת רינדור", progress: 82 },
+    RENDER_PACKAGE_READY: { label: "חבילת רינדור מוכנה לאישור", progress: 88 },
+    RENDER_PACKAGE_APPROVED: { label: "חבילת רינדור מאושרת", progress: 92 },
+    COMPLETED: { label: "הושלם", progress: 100 },
+    FAILED: { label: "נכשל", progress: 100 }
+  };
+  return status ? statuses[status] : undefined;
+}
+
+function buildStageBreakdown(project?: Project, latestRenderJob?: RenderJob) {
+  return {
+    scriptStatus: project?.scenes?.length ? "ready" : "missing",
+    scriptAnalysisStatus: project?.scriptAnalysis ? "ready" : "missing",
+    assetCollectionStatus: project?.materialLibrary ? "ready" : "missing",
+    renderPackageStatus: project?.renderPackage ? "ready" : "missing",
+    renderPackageApprovedAt: project?.renderPackageApprovedAt ?? null,
+    renderStatus: latestRenderJob?.status ?? "not_started",
+    currentProjectStatus: project?.status ?? "no_project",
+    currentRenderStage: latestRenderJob?.stage ?? null,
+    missingAssets: readRenderPackageMissingAssets(project)
+  };
+}
+
+function readRenderPackageMissingAssets(project?: Project) {
+  const renderPackage = project?.renderPackage;
+  if (!renderPackage || typeof renderPackage !== "object") {
+    return [];
+  }
+  const missingAssets = renderPackage.missingAssets;
+  return Array.isArray(missingAssets) ? missingAssets : [];
+}
+
+function RenderStudio() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [renderLogs, setRenderLogs] = useState<AuditLog[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+
+  async function refresh(projectId = selectedProjectId) {
+    const loadedProjects = await apiGet<Project[]>("/projects");
+    setProjects(loadedProjects);
+    const activeId = projectId || loadedProjects.find((project) => project.status === "RENDER_PACKAGE_APPROVED")?.id || loadedProjects[0]?.id || "";
+    setSelectedProjectId(activeId);
+    if (activeId) {
+      setRenderLogs(await apiGet<AuditLog[]>(`/projects/${activeId}/logs`));
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProject || selectedProject.status !== "RENDERING") {
+      return undefined;
+    }
+    const interval = window.setInterval(() => void refresh(selectedProject.id), 5000);
+    return () => window.clearInterval(interval);
+  }, [selectedProject]);
+
+  async function startRender() {
+    if (!selectedProject) {
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiPost<RenderJob>(`/projects/${selectedProject.id}/render`);
+      setMessage("הרינדור נשלח. המערכת קוראת את חבילת החומרים המאושרת ומייצרת קובץ סופי.");
+      await refresh(selectedProject.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "שליחה לרינדור נכשלה");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <div className="page-title">
+        <p className="eyebrow">Render Studio</p>
+        <h2>רינדור מחבילת חומרים מאושרת</h2>
+      </div>
+      <div className="two-col">
+        <div className="panel">
+          <label>בחירת פרויקט
+            <select value={selectedProjectId} onChange={(event) => void refresh(event.target.value)}>
+              <option value="">בחר פרויקט</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>{project.title} · {project.status}</option>
+              ))}
+            </select>
+          </label>
+          {selectedProject && (
+            <>
+              <Badge value={selectedProject.status} />
+              {selectedProject.status !== "RENDER_PACKAGE_APPROVED" && selectedProject.status !== "RENDERING" && selectedProject.status !== "COMPLETED" && (
+                <p className="notice warning-notice">יש להשלים ולאשר חבילת חומרים ב־Pre‑Production לפני רינדור.</p>
+              )}
+              <button className="primary" disabled={busy || selectedProject.status !== "RENDER_PACKAGE_APPROVED"} onClick={() => void startRender()}>
+                {busy ? "שולח..." : "שליחה לרינדור"}
+              </button>
+              {message && <p className="notice">{message}</p>}
+            </>
+          )}
+        </div>
+        <div className="panel">
+          <h3>חבילת הרינדור</h3>
+          {!selectedProject?.renderPackage && <p className="muted">אין עדיין חבילת רינדור לפרויקט הזה.</p>}
+          {selectedProject?.renderPackage && <code className="json-block">{JSON.stringify(selectedProject.renderPackage, null, 2)}</code>}
+        </div>
+      </div>
+      {selectedProject && (
+        <div className="panel">
+          <div className="log-header">
+            <h3>לוג רינדור ותוצרים</h3>
+            <button className="secondary" onClick={() => void refresh(selectedProject.id)}>רענון</button>
+          </div>
+          <div className="download-grid">
+            {selectedProject.renderJobs?.filter((job) => job.outputUrl).map((job) => (
+              <a key={job.id} className="download-card" href={absoluteAssetUrl(job.outputUrl)} target="_blank" download>
+                הורדת סרטון סופי · {job.status}
+              </a>
+            ))}
+            {selectedProject.scenes.filter((scene) => scene.clipUrl).map((scene) => (
+              <a key={scene.id} className="download-card" href={absoluteAssetUrl(scene.clipUrl)} target="_blank" download>
+                הורדת קליפ סצנה {scene.order + 1}
+              </a>
+            ))}
+          </div>
+          <div className="operation-log">
+            {renderLogs.map((log) => (
+              <article key={log.id}>
+                <strong>{String(log.metadata?.message ?? log.action)}</strong>
+                <span>{new Date(log.createdAt).toLocaleTimeString("he-IL")} · {log.action}</span>
+                {log.metadata && <code>{JSON.stringify(log.metadata)}</code>}
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function Assets() {

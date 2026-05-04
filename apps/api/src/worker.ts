@@ -6,7 +6,6 @@ import type { RenderJobPayload } from "@promovid/shared";
 import { prisma } from "./db.js";
 import { redisConnection } from "./queue.js";
 import { mergeSceneClips } from "./render/ffmpegRenderer.js";
-import { collectSceneAssets } from "./providers/assetProvider.js";
 import { generateSceneVideo } from "./providers/videoProvider.js";
 
 type WorkerLog = { at: string; step: string; message: string; metadata?: Record<string, unknown> };
@@ -45,25 +44,28 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
       throw new Error(`Project ${projectId} was not found`);
     }
 
+    if (!project.renderPackageApprovedAt || !project.renderPackage) {
+      throw new Error("Render package must be approved before rendering");
+    }
+
+    await log("render_package_loaded", "נקראה חבילת החומרים המאושרת לפני רינדור", {
+      projectId,
+      approvedAt: project.renderPackageApprovedAt.toISOString()
+    });
+
     const providers = await prisma.providerCredential.findMany({
       where: {
         tenantId: data.tenantId,
-        type: { in: ["MEDIA", "VOICE", "MUSIC", "VIDEO"] },
+        type: "VIDEO",
         enabled: true
       },
       orderBy: [{ type: "asc" }, { priority: "asc" }]
     });
     const providersByType = {
-      MEDIA: providers.filter((provider) => provider.type === "MEDIA"),
-      VOICE: providers.filter((provider) => provider.type === "VOICE"),
-      MUSIC: providers.filter((provider) => provider.type === "MUSIC"),
       VIDEO: providers.filter((provider) => provider.type === "VIDEO")
     };
 
-    await log("providers_loaded", "נטענו ספקי מדיה/קול/מוסיקה/וידאו פעילים", {
-      media: providersByType.MEDIA.length,
-      voice: providersByType.VOICE.length,
-      music: providersByType.MUSIC.length,
+    await log("providers_loaded", "נטענו ספקי וידאו פעילים לשלב הרינדור", {
       video: providersByType.VIDEO.length
     });
 
@@ -73,17 +75,15 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
       const baseProgress = 10 + Math.round((index / Math.max(orderedScenes.length, 1)) * 70);
       await prisma.renderJob.update({
         where: { id: jobId },
-        data: { progress: baseProgress, stage: `scene_${index + 1}_assets` }
+        data: { progress: baseProgress, stage: `scene_${index + 1}_package_assets` }
       });
-      await log("scene_assets_started", "מתחיל איסוף מרכיבים לסצנה", { sceneId: scene.id, scene: index + 1 });
-
-      const assets = await collectSceneAssets(scene, providersByType, {
-        backgroundVideoPrompt: project.backgroundVideoPrompt,
-        musicPrompt: project.musicPrompt
+      await log("scene_package_assets_loaded", "קורא חומרים שנאספו מראש עבור הסצנה", {
+        sceneId: scene.id,
+        scene: index + 1,
+        mediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl,
+        voiceUrl: scene.voiceUrl,
+        musicUrl: scene.musicUrl
       });
-      for (const assetLog of assets.log) {
-        await log(assetLog.step, assetLog.message, assetLog.metadata);
-      }
 
       await prisma.renderJob.update({
         where: { id: jobId },
@@ -95,7 +95,7 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
           project,
           scene,
           videoProviders: providersByType.VIDEO,
-          referenceMediaUrl: assets.mediaUrl,
+          referenceMediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl ?? undefined,
           aspectRatio: project.aspectRatio,
           onLog: log
         }),
@@ -114,9 +114,6 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
       await prisma.scene.update({
         where: { id: scene.id },
         data: {
-          mediaUrl: assets.mediaUrl,
-          voiceUrl: assets.voiceUrl,
-          musicUrl: assets.musicUrl,
           clipUrl: `/api/render-files/${clipFile.id}`,
           referenceMediaUrl: clip.referenceMediaUrl,
           generatedVideoUrl: clip.generatedVideoUrl ?? `/api/render-files/${clipFile.id}`,
@@ -124,7 +121,11 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
           videoPrompt: clip.videoPrompt,
           generationStatus: clip.generationStatus,
           renderLog: {
-            logs: assets.log,
+            packageAssets: {
+              mediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl,
+              voiceUrl: scene.voiceUrl,
+              musicUrl: scene.musicUrl
+            },
             video: {
               provider: clip.videoProvider,
               prompt: clip.videoPrompt,
