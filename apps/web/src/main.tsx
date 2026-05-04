@@ -483,19 +483,20 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         <div className="panel">
           <h3>תסריט, ניתוח וחבילת חומרים</h3>
           {!project && <p className="muted">לאחר יצירת התסריט יוצגו כאן סצנות של 7-8 שניות.</p>}
+          {project && <p className="notice">{nextRequiredPreProductionStep(project)}</p>}
           {project && (
             <div className="stage-actions">
               <button className="secondary" disabled={busy || !["SCRIPT_READY", "SCRIPT_ANALYSIS_READY", "ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void analyzeProject()}>
-                ניתוח תסריט חכם
+                1. ניתוח תסריט חכם
               </button>
               <button className="secondary" disabled={busy || !["SCRIPT_ANALYSIS_READY", "ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void collectAssets()}>
-                איסוף חומרים
+                2. איסוף חומרים
               </button>
               <button className="secondary" disabled={busy || !["ASSETS_READY", "RENDER_PACKAGE_READY"].includes(project.status)} onClick={() => void buildRenderPackage()}>
-                בניית חבילת רינדור
+                3. בניית חבילת רינדור
               </button>
               <button className="primary" disabled={busy || project.status !== "RENDER_PACKAGE_READY"} onClick={() => void approveRenderPackage()}>
-                אישור מעבר לרינדור
+                4. אישור חבילת הרינדור
               </button>
             </div>
           )}
@@ -869,6 +870,23 @@ function readRenderPackageMissingAssets(project?: Project) {
   return Array.isArray(missingAssets) ? missingAssets : [];
 }
 
+function nextRequiredPreProductionStep(project: Project) {
+  const messages: Record<string, string> = {
+    SCRIPT_READY: "השלב הבא: לחץ 1. ניתוח תסריט חכם. זה עדיין לא אישור לרינדור.",
+    SCRIPT_ANALYZING: "המערכת מנתחת עכשיו את התסריט.",
+    SCRIPT_ANALYSIS_READY: "השלב הבא: לחץ 2. איסוף חומרים.",
+    ASSETS_COLLECTING: "המערכת אוספת עכשיו מדיה, קול ומוסיקה.",
+    ASSETS_READY: "השלב הבא: לחץ 3. בניית חבילת רינדור.",
+    RENDER_PACKAGE_BUILDING: "המערכת בונה עכשיו manifest, instructions ו-timeline.",
+    RENDER_PACKAGE_READY: "השלב הבא: לחץ 4. אישור חבילת הרינדור. רק אחרי זה Render Studio יאשר רינדור.",
+    RENDER_PACKAGE_APPROVED: "חבילת הרינדור מאושרת. עבור ל-Render Studio ולחץ שליחה לרינדור.",
+    RENDERING: "הרינדור כבר פעיל. עקוב אחרי ההתקדמות ב-Render Studio.",
+    COMPLETED: "הרינדור הושלם. ניתן להוריד את התוצרים.",
+    FAILED: "הפעולה האחרונה נכשלה. בדוק את הלוג, תקן את הסיבה ונסה שוב מהשלב המתאים."
+  };
+  return messages[project.status] ?? `סטטוס נוכחי: ${project.status}`;
+}
+
 function RenderStudio() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -937,7 +955,10 @@ function RenderStudio() {
             <>
               <Badge value={selectedProject.status} />
               {selectedProject.status !== "RENDER_PACKAGE_APPROVED" && selectedProject.status !== "RENDERING" && selectedProject.status !== "COMPLETED" && (
-                <p className="notice warning-notice">יש להשלים ולאשר חבילת חומרים ב־Pre‑Production לפני רינדור.</p>
+                <p className="notice warning-notice">{nextRequiredPreProductionStep(selectedProject)}</p>
+              )}
+              {selectedProject.status === "RENDER_PACKAGE_APPROVED" && (
+                <p className="notice">חבילת הרינדור מאושרת. אפשר לשלוח לרינדור.</p>
               )}
               <button className="primary" disabled={busy || selectedProject.status !== "RENDER_PACKAGE_APPROVED"} onClick={() => void startRender()}>
                 {busy ? "שולח..." : "שליחה לרינדור"}

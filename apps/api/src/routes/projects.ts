@@ -233,7 +233,7 @@ export async function projectRoutes(app: FastifyInstance) {
       const message = error instanceof Error ? error.message : "Script analysis failed";
       logOperation("script_analysis_failed", "ניתוח התסריט נכשל", { error: message });
       await writeAuditLogs(tenant.id, operationLogs, project.id);
-      await prisma.project.update({ where: { id: project.id }, data: { status: "FAILED" } });
+      await prisma.project.update({ where: { id: project.id }, data: { status: "SCRIPT_READY" } });
       reply.code(500);
       return { error: message, operationLogs };
     }
@@ -504,7 +504,10 @@ async function analyzeScriptWithFailover(
     }
   }
 
-  throw new Error(`All active SCRIPT analysis providers failed. ${errors.join(" | ")}`);
+  logOperation("script_analysis_fallback_used", "כל ספקי ניתוח התסריט נכשלו; משתמש בניתוח fallback מקומי כדי לא לעצור את התהליך", {
+    errors
+  });
+  return analyzeScript({ ...input, onLog: logOperation, provider: null });
 }
 
 function createOperationLogger(
