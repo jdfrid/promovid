@@ -4,6 +4,7 @@ import { prisma } from "../db.js";
 import { renderQueue } from "../queue.js";
 import { generateScript } from "../providers/scriptProvider.js";
 import { decryptSecret } from "../crypto.js";
+import { processRenderJob } from "../worker.js";
 
 const tenantSlug = "demo";
 
@@ -197,6 +198,11 @@ export async function projectRoutes(app: FastifyInstance) {
       tenantId: tenant.id,
       projectId: project.id
     });
+    scheduleInlineRenderRescue({
+      jobId: renderJob.id,
+      tenantId: tenant.id,
+      projectId: project.id
+    });
 
     reply.code(202);
     return { data: renderJob };
@@ -283,6 +289,76 @@ async function writeAuditLogs(tenantId: string, logs: OperationLog[], projectId?
       }
     }))
   });
+}
+
+function scheduleInlineRenderRescue(input: { jobId: string; tenantId: string; projectId: string }) {
+  setTimeout(() => {
+    void rescueQueuedRenderJob(input);
+  }, 3000);
+}
+
+async function rescueQueuedRenderJob(input: { jobId: string; tenantId: string; projectId: string }) {
+  const claimed = await prisma.renderJob.updateMany({
+    where: {
+      id: input.jobId,
+      tenantId: input.tenantId,
+      status: "QUEUED"
+    },
+    data: {
+      status: "RUNNING",
+      stage: "inline_rescue",
+      progress: 1
+    }
+  });
+
+  if (claimed.count === 0) {
+    return;
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: input.tenantId,
+      action: "inline_render_rescue_started",
+      entity: "RenderJob",
+      entityId: input.jobId,
+      metadata: {
+        message: "ה־job נשאר בתור ולכן שירות ה־web מתחיל לעבד אותו ישירות",
+        at: new Date().toISOString(),
+        projectId: input.projectId
+      }
+    }
+  });
+
+  try {
+    await processRenderJob(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Inline render rescue failed";
+    await prisma.renderJob.update({
+      where: { id: input.jobId },
+      data: {
+        status: "FAILED",
+        error: message,
+        progress: 100
+      }
+    });
+    await prisma.project.update({
+      where: { id: input.projectId },
+      data: { status: "FAILED" }
+    });
+    await prisma.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        action: "inline_render_rescue_failed",
+        entity: "RenderJob",
+        entityId: input.jobId,
+        metadata: {
+          message,
+          at: new Date().toISOString(),
+          projectId: input.projectId
+        }
+      }
+    });
+  }
 }
 
 async function getDemoTenant() {

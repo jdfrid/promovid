@@ -11,10 +11,8 @@ import { generateSceneVideo } from "./providers/videoProvider.js";
 
 type WorkerLog = { at: string; step: string; message: string; metadata?: Record<string, unknown> };
 
-const worker = new Worker<RenderJobPayload>(
-  "render-jobs",
-  async (job) => {
-    const { jobId, projectId } = job.data;
+export async function processRenderJob(data: RenderJobPayload, updateProgress?: (progress: number) => Promise<void> | void) {
+    const { jobId, projectId } = data;
     const logs: WorkerLog[] = [];
     const log = async (step: string, message: string, metadata?: Record<string, unknown>) => {
       const metadataWithProject = { projectId, ...(metadata ?? {}) };
@@ -23,7 +21,7 @@ const worker = new Worker<RenderJobPayload>(
       console.log(`[render:${jobId}] ${step} ${message}`, metadataWithProject);
       await prisma.auditLog.create({
         data: {
-          tenantId: job.data.tenantId,
+          tenantId: data.tenantId,
           action: step,
           entity: "RenderJob",
           entityId: jobId,
@@ -49,7 +47,7 @@ const worker = new Worker<RenderJobPayload>(
 
     const providers = await prisma.providerCredential.findMany({
       where: {
-        tenantId: job.data.tenantId,
+        tenantId: data.tenantId,
         type: { in: ["MEDIA", "VOICE", "MUSIC", "VIDEO"] },
         enabled: true
       },
@@ -106,7 +104,7 @@ const worker = new Worker<RenderJobPayload>(
       );
       renderedClipPaths.push(clip.outputPath);
       const clipFile = await storeRenderFile({
-        tenantId: job.data.tenantId,
+        tenantId: data.tenantId,
         projectId: project.id,
         sceneId: scene.id,
         renderJobId: jobId,
@@ -160,13 +158,13 @@ const worker = new Worker<RenderJobPayload>(
       onLog: log
     });
     const finalFile = await storeRenderFile({
-      tenantId: job.data.tenantId,
+      tenantId: data.tenantId,
       projectId: project.id,
       renderJobId: jobId,
       filePath: output.outputPath
     });
 
-    await job.updateProgress(90);
+    await updateProgress?.(90);
 
     await prisma.$transaction([
       prisma.renderJob.update({
@@ -187,7 +185,11 @@ const worker = new Worker<RenderJobPayload>(
       outputUrl: `/api/render-files/${finalFile.id}`,
       sizeBytes: finalFile.sizeBytes
     });
-  },
+}
+
+const worker = new Worker<RenderJobPayload>(
+  "render-jobs",
+  async (job) => processRenderJob(job.data, (progress) => job.updateProgress(progress)),
   {
     connection: redisConnection,
     concurrency: 1,
