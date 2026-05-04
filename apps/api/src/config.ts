@@ -9,7 +9,8 @@ const schema = z.object({
   JWT_SECRET: z.string().default("dev-secret"),
   ENCRYPTION_KEY: z.string().default("0123456789abcdef0123456789abcdef"),
   LOCAL_STORAGE_PATH: z.string().default("./uploads"),
-  APP_URL: z.string().default("http://localhost:5173")
+  APP_URL: z.string().default("http://localhost:5173"),
+  RUN_INLINE_RENDER_WORKER: z.string().default("true")
 });
 
 export const config = schema.parse(process.env);

@@ -72,6 +72,11 @@ await app.listen({
   host: "0.0.0.0"
 });
 
+if (config.RUN_INLINE_RENDER_WORKER !== "false") {
+  await import("./worker.js");
+  app.log.info("Inline render worker started in web service");
+}
+
 async function readWebAppHtml() {
   if (existsSync(webIndexPath)) {
     return readFile(webIndexPath, "utf8");
