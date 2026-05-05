@@ -264,9 +264,11 @@ export async function projectRoutes(app: FastifyInstance) {
 
     for (const scene of project.scenes) {
       logOperation("scene_asset_collection_started", "מתחיל איסוף חומרים לסצנה", { sceneId: scene.id, sceneOrder: scene.order + 1 });
+      const analysisScene = findAnalysisScene(project.scriptAnalysis, scene.order);
       const assets = await collectSceneAssets(scene, providersByType, {
         backgroundVideoPrompt: project.backgroundVideoPrompt,
-        musicPrompt: project.musicPrompt
+        sceneMediaPrompt: stringFromRecord(analysisScene, "backgroundPrompt") ?? stringFromRecord(analysisScene, "visualRequirements"),
+        musicPrompt: stringFromRecord(analysisScene, "musicPrompt") ?? project.musicPrompt
       });
       for (const assetLog of assets.log) {
         logOperation(assetLog.step, assetLog.message, assetLog.metadata);
@@ -524,6 +526,27 @@ function createOperationLogger(
     operationLogs.push(entry);
     requestLog.info({ step, metadata }, message);
   };
+}
+
+function findAnalysisScene(scriptAnalysis: Prisma.JsonValue | null, order: number) {
+  if (!scriptAnalysis || typeof scriptAnalysis !== "object" || Array.isArray(scriptAnalysis)) {
+    return undefined;
+  }
+  const scenes = (scriptAnalysis as Record<string, unknown>).scenes;
+  if (!Array.isArray(scenes)) {
+    return undefined;
+  }
+  return scenes.find((scene) => {
+    if (!scene || typeof scene !== "object") {
+      return false;
+    }
+    return Number((scene as Record<string, unknown>).order) === order;
+  }) as Record<string, unknown> | undefined;
+}
+
+function stringFromRecord(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function dedupeProvidersByName<T extends { provider: string }>(providers: T[]) {

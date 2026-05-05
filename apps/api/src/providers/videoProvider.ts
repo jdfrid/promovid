@@ -87,7 +87,15 @@ export async function generateSceneVideo(input: {
   const fallbackReason = input.videoProviders.length === 0
     ? "VIDEO provider missing"
     : "No active VIDEO provider returned a generated clip";
-  await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי; מפעיל fallback ברור של FFmpeg", {
+  if (!isFfmpegFallbackAllowed(input.videoProviders)) {
+    await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי ולכן הרינדור נעצר במקום לייצר סרטון טקסט לא קשור", {
+      sceneId: input.scene.id,
+      fallbackReason
+    });
+    throw new Error(`True video generation failed for scene ${input.scene.order + 1}: ${fallbackReason}. Configure an active VIDEO provider with a working endpoint/API key, or explicitly enable FFmpeg fallback in the VIDEO provider config with allowFfmpegFallback=true.`);
+  }
+
+  await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי; מפעיל fallback ברור של FFmpeg לפי הגדרת ספק", {
     sceneId: input.scene.id,
     fallbackReason
   });
@@ -109,6 +117,13 @@ export async function generateSceneVideo(input: {
     generationStatus: "fallback",
     fallbackReason
   };
+}
+
+function isFfmpegFallbackAllowed(videoProviders: ProviderCredential[]) {
+  return videoProviders.some((provider) => {
+    const config = asRecord(provider.config);
+    return config.allowFfmpegFallback === true;
+  });
 }
 
 export function buildSceneVideoPrompt(project: Project, scene: Scene, referenceMediaUrl?: string) {

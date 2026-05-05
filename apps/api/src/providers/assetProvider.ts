@@ -46,10 +46,10 @@ interface OpenverseAudioResponse {
 export async function collectSceneAssets(
   scene: Scene,
   providers: ProviderByType,
-  prompts?: { backgroundVideoPrompt?: string | null; musicPrompt?: string | null }
+  prompts?: { backgroundVideoPrompt?: string | null; sceneMediaPrompt?: string | null; musicPrompt?: string | null }
 ): Promise<SceneAssets> {
   const log: SceneAssets["log"] = [];
-  const mediaUrl = await findMedia(scene, providers.MEDIA ?? [], log, prompts?.backgroundVideoPrompt);
+  const mediaUrl = await findMedia(scene, providers.MEDIA ?? [], log, prompts?.sceneMediaPrompt ?? prompts?.backgroundVideoPrompt);
   const voiceUrl = await createVoice(scene, providers.VOICE ?? [], log);
   const musicUrl = await findMusic(scene, providers.MUSIC ?? [], log, prompts?.musicPrompt);
 
@@ -103,7 +103,7 @@ async function findMedia(scene: Scene, providers: ProviderCredential[], log: Sce
 }
 
 function buildPexelsQuery(scene: Scene, backgroundVideoPrompt?: string | null) {
-  const source = backgroundVideoPrompt || scene.visualPrompt || `${scene.title} ${scene.narration}`;
+  const source = scene.visualPrompt || backgroundVideoPrompt || `${scene.title} ${scene.narration}`;
   const cleaned = source
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
@@ -175,21 +175,11 @@ async function createVoice(scene: Scene, providers: ProviderCredential[], log: S
   for (const provider of providers) {
     log.push({ step: "voice_provider_attempt", message: "מנסה ליצור קריינות לסצנה", metadata: { provider: provider.provider, sceneId: scene.id } });
     if (provider.provider.toLowerCase().includes("openverse")) {
-      const audio = await searchOpenverseAudio({
-        provider,
-        query: buildAudioQuery(scene),
-        targetDuration: scene.durationSeconds,
-        log,
-        logPrefix: "voice"
+      log.push({
+        step: "voice_provider_skipped",
+        message: "Openverse הוא מאגר אודיו/מוסיקה ולא מנוע TTS לדיבוב דיאלוג; מדלג כדי לא לצרף קול לא קשור",
+        metadata: { provider: provider.provider, sceneId: scene.id }
       });
-      if (audio) {
-        log.push({
-          step: "voice_provider_success",
-          message: "נמצא קובץ קול ב-Openverse לסצנה",
-          metadata: audio.metadata
-        });
-        return audio.url;
-      }
       continue;
     }
 

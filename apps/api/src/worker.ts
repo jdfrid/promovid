@@ -5,7 +5,7 @@ import path from "node:path";
 import type { RenderJobPayload } from "@promovid/shared";
 import { prisma } from "./db.js";
 import { redisConnection } from "./queue.js";
-import { mergeSceneClips } from "./render/ffmpegRenderer.js";
+import { addAudioToClip, mergeSceneClips } from "./render/ffmpegRenderer.js";
 import { generateSceneVideo } from "./providers/videoProvider.js";
 
 type WorkerLog = { at: string; step: string; message: string; metadata?: Record<string, unknown> };
@@ -102,13 +102,21 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
         150_000,
         `Scene ${index + 1} video generation timed out after 150 seconds`
       );
-      renderedClipPaths.push(clip.outputPath);
+      const clipWithAudioPath = await addAudioToClip({
+        projectId: project.id,
+        scene,
+        videoPath: clip.outputPath,
+        musicUrl: scene.musicUrl,
+        voiceUrl: scene.voiceUrl,
+        onLog: log
+      });
+      renderedClipPaths.push(clipWithAudioPath);
       const clipFile = await storeRenderFile({
         tenantId: data.tenantId,
         projectId: project.id,
         sceneId: scene.id,
         renderJobId: jobId,
-        filePath: clip.outputPath
+        filePath: clipWithAudioPath
       });
 
       await prisma.scene.update({

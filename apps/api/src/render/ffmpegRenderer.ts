@@ -179,6 +179,45 @@ export async function mergeSceneClips(input: {
   };
 }
 
+export async function addAudioToClip(input: {
+  projectId: string;
+  scene: Scene;
+  videoPath: string;
+  musicUrl?: string | null;
+  voiceUrl?: string | null;
+  onLog?: RenderLogger;
+}) {
+  if (!input.musicUrl && !input.voiceUrl) {
+    return input.videoPath;
+  }
+
+  const outputDirectory = path.resolve("./renders");
+  await mkdir(outputDirectory, { recursive: true });
+  const outputPath = path.join(outputDirectory, `${input.projectId}-scene-${input.scene.order + 1}-audio-${nanoid(8)}.mp4`);
+  const args = [
+    "-i", input.videoPath,
+    ...(input.musicUrl ? ["-stream_loop", "-1", "-i", input.musicUrl] : []),
+    ...(input.voiceUrl ? ["-i", input.voiceUrl] : []),
+    "-t", String(input.scene.durationSeconds),
+    "-map", "0:v:0",
+    ...(input.musicUrl || input.voiceUrl ? ["-map", input.voiceUrl ? (input.musicUrl ? "2:a:0" : "1:a:0") : "1:a:0"] : []),
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-shortest",
+    "-movflags", "+faststart",
+    "-y",
+    outputPath
+  ];
+
+  await input.onLog?.("scene_audio_mux_started", "מצרף אודיו לקליפ הסצנה", {
+    sceneId: input.scene.id,
+    hasMusic: Boolean(input.musicUrl),
+    hasVoice: Boolean(input.voiceUrl)
+  });
+  await runFfmpeg(args, 45, input.onLog);
+  return outputPath;
+}
+
 function dimensionsFor(aspectRatio: string) {
   if (aspectRatio === "16:9") {
     return { width: 854, height: 480 };
