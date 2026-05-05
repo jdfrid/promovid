@@ -1,6 +1,4 @@
 import type { ProviderCredential, Scene } from "@prisma/client";
-import type { OpenverseAudioDetail } from "@openverse/api-client";
-import { OpenverseClient } from "@openverse/api-client";
 import { decryptSecret } from "../crypto.js";
 
 export interface SceneAssets {
@@ -24,6 +22,25 @@ interface OpenverseAudioCandidate {
   filetype: string | null;
   filesize?: number;
   foreignLandingUrl: string | null;
+}
+
+interface OpenverseAudioDetail {
+  url?: string | null;
+  title: string | null;
+  creator: string | null;
+  provider: string | null;
+  source: string | null;
+  license: string;
+  license_url: string | null;
+  duration: number | null;
+  filetype: string | null;
+  filesize: string | null;
+  foreign_landing_url: string | null;
+  mature?: boolean;
+}
+
+interface OpenverseAudioResponse {
+  results: OpenverseAudioDetail[];
 }
 
 export async function collectSceneAssets(
@@ -241,15 +258,11 @@ async function searchOpenverseAudio(input: {
   log: SceneAssets["log"];
   logPrefix: "voice" | "music";
 }) {
-  const credentials = openverseCredentials(input.provider, input.log);
   const config = asRecord(input.provider.config);
-  const baseUrl = stringConfig(config.baseUrl);
+  const baseUrl = stringConfig(config.baseUrl) ?? "https://api.openverse.org";
   const pageSize = numberConfig(config.pageSize) ?? 10;
   const timeoutMs = numberConfig(config.timeoutMs) ?? 8000;
-  const client = OpenverseClient({
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(credentials ? { credentials } : {})
-  });
+  const credentials = openverseCredentials(input.provider, input.log);
 
   input.log.push({
     step: `${input.logPrefix}_openverse_search_started`,
@@ -262,32 +275,29 @@ async function searchOpenverseAudio(input: {
     }
   });
 
-  const timeout = new Promise<never>((_resolve, reject) => {
-    setTimeout(() => reject(new Error(`Openverse search timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
-
   try {
-    const response = await Promise.race([
-      client("GET v1/audio/", {
-        params: {
-          q: input.query,
-          page_size: pageSize,
-          mature: false
-        } as never
-      }),
-      timeout
-    ]);
+    const url = new URL("/v1/audio/", baseUrl);
+    url.searchParams.set("q", input.query);
+    url.searchParams.set("page_size", String(pageSize));
+    url.searchParams.set("mature", "false");
 
-    if (response.meta.status >= 400) {
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        "user-agent": "AdBot/0.1 (+https://promovid.onrender.com)"
+      }
+    }, timeoutMs);
+
+    if (!response.ok) {
       input.log.push({
         step: `${input.logPrefix}_openverse_error`,
         message: "Openverse החזיר שגיאה בחיפוש אודיו",
-        metadata: { status: response.meta.status, query: input.query }
+        metadata: { status: response.status, query: input.query }
       });
       return undefined;
     }
 
-    const candidates = response.body.results
+    const payload = await response.json() as OpenverseAudioResponse;
+    const candidates = (payload.results ?? [])
       .filter((audio) => Boolean(audio.url) && !audio.mature)
       .map((audio: OpenverseAudioDetail): OpenverseAudioCandidate => ({
         url: audio.url!,
@@ -315,7 +325,7 @@ async function searchOpenverseAudio(input: {
       input.log.push({
         step: `${input.logPrefix}_openverse_no_match`,
         message: "Openverse לא החזיר קובץ אודיו מתאים",
-        metadata: { query: input.query, returnedResults: response.body.results.length }
+        metadata: { query: input.query, returnedResults: payload.results?.length ?? 0 }
       });
       return undefined;
     }
@@ -439,6 +449,19 @@ async function searchPexels(query: string, apiKey: string, sceneDuration: number
       metadata: { query, error: error instanceof Error ? error.message : "unknown error" }
     });
     return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchWithTimeout(url: URL, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
   } finally {
     clearTimeout(timeout);
   }
