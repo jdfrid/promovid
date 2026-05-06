@@ -6,6 +6,7 @@ import { decryptSecret } from "../crypto.js";
 import { renderSceneClip } from "../render/ffmpegRenderer.js";
 
 type VideoProviderLog = (step: string, message: string, metadata?: Record<string, unknown>) => Promise<void> | void;
+const SHOTSTACK_SEGMENT_SECONDS = 5;
 
 export interface SceneVideoResult {
   outputPath: string;
@@ -41,7 +42,17 @@ export async function generateSceneVideo(input: {
     });
 
     try {
-      const generated = providerName.includes("runway")
+      const generated = providerName.includes("shotstack")
+        ? await generateWithShotstack({
+          provider,
+          prompt: videoPrompt,
+          scene: input.scene,
+          project: input.project,
+          referenceMediaUrl: input.referenceMediaUrl,
+          aspectRatio: input.aspectRatio,
+          onLog: input.onLog
+        })
+        : providerName.includes("runway")
         ? await generateWithRunway({
           provider,
           prompt: videoPrompt,
@@ -129,7 +140,7 @@ function isFfmpegFallbackAllowed(videoProviders: ProviderCredential[]) {
 export function buildSceneVideoPrompt(project: Project, scene: Scene, referenceMediaUrl?: string) {
   return [
     "Create a new short promotional video clip for this exact scene. The clip must visually tell the scene, not place text over stock footage.",
-    `Duration: ${scene.durationSeconds} seconds.`,
+    `Duration: ${SHOTSTACK_SEGMENT_SECONDS} seconds.`,
     `Aspect ratio: ${project.aspectRatio}.`,
     project.style ? `Style: ${project.style}.` : undefined,
     project.targetAudience ? `Target audience: ${project.targetAudience}.` : undefined,
@@ -143,6 +154,89 @@ export function buildSceneVideoPrompt(project: Project, scene: Scene, referenceM
     "Include cinematic camera movement, lighting, mood, composition, and product-focused action.",
     "Do not burn visible text into the video unless explicitly required by the scene."
   ].filter(Boolean).join("\n");
+}
+
+async function generateWithShotstack(input: {
+  provider: ProviderCredential;
+  prompt: string;
+  scene: Scene;
+  project: Project;
+  referenceMediaUrl?: string;
+  aspectRatio: string;
+  onLog?: VideoProviderLog;
+}) {
+  const apiKey = input.provider.encryptedKey ? decryptSecret(input.provider.encryptedKey) : undefined;
+  if (!apiKey) {
+    throw new Error("Shotstack provider is missing an API key.");
+  }
+
+  const config = asRecord(input.provider.config);
+  const version = stringConfig(config.version) ?? "stage";
+  const baseUrl = normalizeShotstackBaseUrl(stringConfig(config.baseUrl) ?? stringConfig(config.endpoint) ?? `https://api.shotstack.io/edit/${version}`);
+  const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 240;
+  const voice = stringConfig(config.voice) ?? "Matthew";
+  const language = stringConfig(config.language) ?? "en-US";
+  const renderLength = SHOTSTACK_SEGMENT_SECONDS;
+
+  await input.onLog?.("shotstack_render_request_sent", "נשלחה בקשת Shotstack לרינדור מקטע של 5 שניות", {
+    provider: input.provider.provider,
+    sceneId: input.scene.id,
+    renderLength,
+    version,
+    hasReferenceMedia: Boolean(input.referenceMediaUrl)
+  });
+
+  const response = await fetchWithTimeout(`${baseUrl}/render`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "x-api-key": apiKey
+    },
+    body: JSON.stringify(buildShotstackEdit({
+      scene: input.scene,
+      referenceMediaUrl: input.referenceMediaUrl,
+      aspectRatio: input.aspectRatio,
+      length: renderLength,
+      voice,
+      language
+    }))
+  }, 30_000);
+  const payload = await readJson(response);
+  if (!response.ok) {
+    throw new Error(`Shotstack render request failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
+  }
+
+  const renderId = stringConfig(asRecord(payload.response).id) ?? stringConfig(payload.id);
+  if (!renderId) {
+    throw new Error(`Shotstack response did not include render id: ${JSON.stringify(payload).slice(0, 500)}`);
+  }
+
+  await input.onLog?.("shotstack_render_created", "Shotstack יצר משימת רינדור", {
+    sceneId: input.scene.id,
+    renderId
+  });
+
+  const render = await pollShotstackRender({
+    baseUrl,
+    apiKey,
+    renderId,
+    timeoutSeconds,
+    onLog: input.onLog
+  });
+  const generatedVideoUrl = stringConfig(asRecord(render.response).url) ?? stringConfig(render.url);
+  if (!generatedVideoUrl) {
+    throw new Error(`Shotstack render completed without URL: ${JSON.stringify(render).slice(0, 700)}`);
+  }
+
+  const outputPath = await downloadGeneratedVideo({
+    projectId: input.project.id,
+    sceneOrder: input.scene.order,
+    url: generatedVideoUrl,
+    onLog: input.onLog
+  });
+
+  return { outputPath, generatedVideoUrl };
 }
 
 async function generateWithRunway(input: {
@@ -338,6 +432,117 @@ async function pollRunwayTask(input: {
   throw new Error(`Runway task timed out after ${input.timeoutSeconds} seconds`);
 }
 
+async function pollShotstackRender(input: {
+  baseUrl: string;
+  apiKey: string;
+  renderId: string;
+  timeoutSeconds: number;
+  onLog?: VideoProviderLog;
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  while (Date.now() - startedAt < input.timeoutSeconds * 1000) {
+    attempts += 1;
+    const response = await fetchWithTimeout(`${input.baseUrl}/render/${input.renderId}`, {
+      headers: {
+        accept: "application/json",
+        "x-api-key": input.apiKey
+      }
+    }, 15_000);
+    const payload = await readJson(response);
+    if (!response.ok) {
+      throw new Error(`Shotstack status polling failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
+    }
+
+    const status = stringConfig(asRecord(payload.response).status) ?? stringConfig(payload.status) ?? "unknown";
+    await input.onLog?.("shotstack_render_progress", "בודק סטטוס רינדור Shotstack", {
+      renderId: input.renderId,
+      status,
+      attempts
+    });
+
+    if (status === "done") {
+      return payload;
+    }
+
+    if (["failed", "cancelled", "canceled"].includes(status)) {
+      throw new Error(`Shotstack render ${status}: ${JSON.stringify(payload).slice(0, 700)}`);
+    }
+
+    await wait(5000);
+  }
+
+  throw new Error(`Shotstack render timed out after ${input.timeoutSeconds} seconds`);
+}
+
+function buildShotstackEdit(input: {
+  scene: Scene;
+  referenceMediaUrl?: string;
+  aspectRatio: string;
+  length: number;
+  voice: string;
+  language: string;
+}) {
+  const tracks = [
+    {
+      clips: [
+        {
+          asset: input.referenceMediaUrl
+            ? {
+              type: "video",
+              src: input.referenceMediaUrl,
+              volume: 0
+            }
+            : {
+              type: "html",
+              html: `<div style="width:100%;height:100%;background:#111827;"></div>`,
+              width: 1080,
+              height: 1920
+            },
+          start: 0,
+          length: input.length,
+          fit: "crop"
+        }
+      ]
+    },
+    {
+      clips: [
+        {
+          asset: {
+            type: "text-to-speech",
+            text: input.scene.narration,
+            voice: input.voice,
+            language: input.language
+          },
+          start: 0,
+          length: input.length
+        }
+      ]
+    }
+  ];
+
+  return {
+    timeline: {
+      background: "#111827",
+      tracks
+    },
+    output: {
+      format: "mp4",
+      resolution: "hd",
+      aspectRatio: shotstackAspectRatioFor(input.aspectRatio)
+    }
+  };
+}
+
+function normalizeShotstackBaseUrl(value: string) {
+  return value.replace(/\/render\/?$/i, "").replace(/\/$/, "");
+}
+
+function shotstackAspectRatioFor(aspectRatio: string) {
+  return aspectRatio === "16:9" || aspectRatio === "1:1" ? aspectRatio : "9:16";
+}
+
 async function downloadGeneratedVideo(input: {
   projectId: string;
   sceneOrder: number;
@@ -395,6 +600,9 @@ function extractTaskOutputUrl(payload: Record<string, unknown>) {
 }
 
 function videoProviderHint(providerName: string) {
+  if (providerName.includes("shotstack")) {
+    return "Set a Shotstack API key in the VIDEO provider. The adapter renders every scene as a 5 second Shotstack render.";
+  }
   if (providerName.includes("gemini") || providerName.includes("veo")) {
     return "Gemini/Veo adapter is available through a configured endpoint/webhookUrl until direct Veo API is enabled.";
   }

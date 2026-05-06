@@ -18,14 +18,28 @@ interface OperationLog {
   metadata?: Record<string, unknown>;
 }
 
+const supplementalFileSchema = z.object({
+  name: z.string().min(1),
+  mimeType: z.string().optional(),
+  assetType: z.string().optional(),
+  assetUrl: z.string().optional(),
+  extractedText: z.string().max(12000).optional(),
+  imageDataUrl: z.string().max(6_000_000).optional()
+});
+
 const createProjectSchema = z.object({
   title: z.string().min(2),
-  sourceText: z.string().min(2),
+  sourceText: z.string().default(""),
+  supplementalLinks: z.array(z.string().url()).max(10).default([]),
+  supplementalFiles: z.array(supplementalFileSchema).max(8).default([]),
   mode: z.enum(["manual", "automatic", "assisted", "series"]).default("manual"),
   targetAudience: z.string().optional(),
   style: z.string().optional(),
   duration: z.number().int().min(15).max(60).default(30),
   aspectRatio: z.enum(["9:16", "16:9", "1:1"]).default("9:16")
+}).refine((data) => data.sourceText.trim() || data.supplementalLinks.length || data.supplementalFiles.length, {
+  message: "sourceText, supplementalLinks or supplementalFiles is required",
+  path: ["sourceText"]
 });
 
 export async function projectRoutes(app: FastifyInstance) {
@@ -105,11 +119,14 @@ export async function projectRoutes(app: FastifyInstance) {
       request.log.info({ step, metadata }, message);
     };
 
+    const enrichedSourceText = buildEnrichedSourceText(input);
     logOperation("project_create_received", "התקבלה בקשה ליצירת תסריט", {
       title: input.title,
       duration: input.duration,
       aspectRatio: input.aspectRatio,
-      sourceLength: input.sourceText.length
+      sourceLength: enrichedSourceText.length,
+      supplementalLinkCount: input.supplementalLinks.length,
+      supplementalFileCount: input.supplementalFiles.length
     });
 
     const scriptProvidersRaw = await prisma.providerCredential.findMany({
@@ -132,7 +149,10 @@ export async function projectRoutes(app: FastifyInstance) {
 
     let scriptResult: Awaited<ReturnType<typeof generateScript>>;
     try {
-      scriptResult = await generateScriptWithFailover(input, scriptProviders, logOperation);
+      scriptResult = await generateScriptWithFailover({
+        ...input,
+        sourceText: enrichedSourceText
+      }, scriptProviders, logOperation);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Script generation failed";
       logOperation("script_generation_failed", "יצירת התסריט נכשלה", { error: message });
@@ -150,7 +170,7 @@ export async function projectRoutes(app: FastifyInstance) {
       data: {
         tenantId: tenant.id,
         title: input.title,
-        sourceText: input.sourceText,
+        sourceText: enrichedSourceText,
         mode: input.mode,
         targetAudience: input.targetAudience,
         style: input.style,
@@ -199,6 +219,8 @@ export async function projectRoutes(app: FastifyInstance) {
       const analysis = await analyzeScriptWithFailover({
         title: project.title,
         sourceText: project.sourceText,
+        supplementalLinks: [],
+        supplementalFiles: [],
         mode: project.mode as z.infer<typeof createProjectSchema>["mode"],
         duration: project.duration,
         style: project.style ?? undefined,
@@ -510,6 +532,33 @@ async function analyzeScriptWithFailover(
     errors
   });
   return analyzeScript({ ...input, onLog: logOperation, provider: null });
+}
+
+function buildEnrichedSourceText(input: z.infer<typeof createProjectSchema>) {
+  const sections = [
+    input.sourceText.trim(),
+    input.supplementalLinks.length
+      ? [
+        "Additional reference links supplied in Pre-Production:",
+        ...input.supplementalLinks.map((link, index) => `${index + 1}. ${link}`)
+      ].join("\n")
+      : undefined,
+    input.supplementalFiles.length
+      ? [
+        "Uploaded reference files supplied in Pre-Production:",
+        ...input.supplementalFiles.map((file, index) => [
+          `${index + 1}. ${file.name}`,
+          file.mimeType ? `mimeType: ${file.mimeType}` : undefined,
+          file.assetType ? `assetType: ${file.assetType}` : undefined,
+          file.assetUrl ? `storedUrl: ${file.assetUrl}` : undefined,
+          file.extractedText ? `extractedText:\n${file.extractedText.slice(0, 4000)}` : undefined,
+          file.imageDataUrl ? "imageReference: attached to the AI request as an inline image; use it as a visual reference." : undefined
+        ].filter(Boolean).join("\n"))
+      ].join("\n\n")
+      : undefined
+  ];
+
+  return sections.filter(Boolean).join("\n\n");
 }
 
 function createOperationLogger(

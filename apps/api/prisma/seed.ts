@@ -32,6 +32,7 @@ async function main() {
     ["VOICE", "openverse", "Openverse Audio Search"],
     ["VOICE", "elevenlabs", "ElevenLabs Voiceover"],
     ["MUSIC", "openverse", "Openverse Audio Search"],
+    ["VIDEO", "shotstack", "Shotstack 5 Second Renderer"],
     ["VIDEO", "gemini", "Gemini Video"],
     ["MERGE", "ffmpeg", "Self-hosted FFmpeg"],
     ["STORAGE", "local", "Local Storage"]

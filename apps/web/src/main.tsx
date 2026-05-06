@@ -43,6 +43,7 @@ interface OperationLog {
 const defaultCreateForm = {
   title: "",
   sourceText: "",
+  supplementalLinksText: "",
   mode: "manual",
   style: "מודרני, חד, מכירתי",
   targetAudience: "לקוחות חדשים",
@@ -51,6 +52,15 @@ const defaultCreateForm = {
 };
 
 type CreateForm = typeof defaultCreateForm;
+
+interface SupplementalFileInput {
+  name: string;
+  mimeType?: string;
+  assetType?: string;
+  assetUrl?: string;
+  extractedText?: string;
+  imageDataUrl?: string;
+}
 
 function loadCreateForm(): CreateForm {
   try {
@@ -188,6 +198,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     }
   });
   const [form, setForm] = useState<CreateForm>(() => loadCreateForm());
+  const [supplementalFiles, setSupplementalFiles] = useState<File[]>([]);
 
   useEffect(() => {
     localStorage.setItem("promovid:create-form", JSON.stringify(form));
@@ -235,16 +246,24 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
       title: form.title,
       duration: form.duration,
       aspectRatio: form.aspectRatio,
-      sourceLength: form.sourceText.length
+      sourceLength: form.sourceText.length,
+      supplementalLinkCount: splitSupplementalLinks(form.supplementalLinksText).length,
+      supplementalFileCount: supplementalFiles.length
     });
     try {
+      const uploadedFiles = await uploadSupplementalFiles(supplementalFiles);
       addLog("create_script_request_sent", "שולח את הערכים לשרת");
-      const createdProject = await apiPost<Project & { operationLogs?: OperationLog[] }>("/projects", form);
+      const createdProject = await apiPost<Project & { operationLogs?: OperationLog[] }>("/projects", {
+        ...form,
+        supplementalLinks: splitSupplementalLinks(form.supplementalLinksText),
+        supplementalFiles: uploadedFiles
+      });
       setProject(createdProject);
       addLog("create_script_response_received", "התקבלה תשובה מהשרת", {
         projectId: createdProject.id,
         sceneCount: createdProject.scenes.length
       });
+      setSupplementalFiles([]);
       addLog("script_ready_waiting_for_render", "התסריט מוכן. כדי לאסוף מדיה, מוסיקה וליצור וידאו צריך ללחוץ שליחה לרינדור.", {
         projectId: createdProject.id,
         nextAction: "analyze_script"
@@ -259,6 +278,41 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function uploadSupplementalFiles(files: File[]): Promise<SupplementalFileInput[]> {
+    const uploaded: SupplementalFileInput[] = [];
+    for (const file of files.slice(0, 8)) {
+      addLog("supplemental_file_upload_started", "מעלה קובץ/תמונה ל-Pre-Production", {
+        name: file.name,
+        mimeType: file.type,
+        size: file.size
+      });
+      const assetType = inferAssetType(file);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("type", assetType);
+      formData.append("name", file.name);
+      const [asset, context] = await Promise.all([
+        apiPost<Asset>("/assets", formData),
+        readFileForScriptContext(file)
+      ]);
+      uploaded.push({
+        name: file.name,
+        mimeType: file.type || asset.mimeType,
+        assetType,
+        assetUrl: asset.url,
+        ...context
+      });
+      addLog("supplemental_file_upload_completed", "הקובץ נשמר ויצורף כהקשר לתסריט", {
+        name: file.name,
+        assetId: asset.id,
+        assetType,
+        hasExtractedText: Boolean(context.extractedText),
+        hasImageReference: Boolean(context.imageDataUrl)
+      });
+    }
+    return uploaded;
   }
 
   async function runProjectStage(path: string, startedStep: string, startedMessage: string, completedStep: string, completedMessage: string) {
@@ -459,6 +513,31 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
               onChange={(event) => updateForm("sourceText", event.target.value)}
             />
           </label>
+          <div className="supporting-inputs">
+            <label>קישורים נוספים לחומרי רקע / מוצר / מתחרים
+              <textarea
+                value={form.supplementalLinksText}
+                placeholder={"קישור אחד בכל שורה, לדוגמה:\nhttps://example.com/product\nhttps://example.com/review"}
+                onChange={(event) => updateForm("supplementalLinksText", event.target.value)}
+              />
+            </label>
+            <label>העלאת תמונות או קבצי הסבר
+              <input
+                type="file"
+                multiple
+                accept="image/*,.txt,.md,.json,.csv,.pdf,.doc,.docx"
+                onChange={(event) => setSupplementalFiles(Array.from(event.target.files ?? []).slice(0, 8))}
+              />
+            </label>
+            <p className="muted">תמונות יישלחו ל-Gemini כרפרנס ויזואלי. קבצי טקסט/JSON/CSV/Markdown ייקראו וישולבו בהוראות התסריט.</p>
+            {supplementalFiles.length > 0 && (
+              <div className="file-chip-list">
+                {supplementalFiles.map((file) => (
+                  <span key={`${file.name}-${file.size}`}>{file.name} · {formatBytes(file.size)}</span>
+                ))}
+              </div>
+            )}
+          </div>
           <label>מצב יצירה<select value={form.mode} onChange={(event) => updateForm("mode", event.target.value)}>
             <option value="manual">ידני</option>
             <option value="automatic">אוטומטי</option>
@@ -477,7 +556,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
               <option>1:1</option>
             </select></label>
           </div>
-          <button className="primary" disabled={busy || !form.title || !form.sourceText} onClick={createProject}>{busy ? "מעבד..." : "יצירת תסריט"}</button>
+          <button className="primary" disabled={busy || !form.title || !hasPreProductionInput(form, supplementalFiles)} onClick={createProject}>{busy ? "מעבד..." : "יצירת תסריט"}</button>
           {error && <p className="notice error-notice">{error}</p>}
         </div>
         <div className="panel">
@@ -1063,13 +1142,75 @@ function Assets() {
   );
 }
 
+function splitSupplementalLinks(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((link) => link.trim())
+    .filter(Boolean);
+}
+
+function hasPreProductionInput(form: CreateForm, files: File[]) {
+  return Boolean(form.sourceText.trim() || form.supplementalLinksText.trim() || files.length);
+}
+
+function inferAssetType(file: File) {
+  if (file.type.startsWith("image/")) {
+    return "IMAGE";
+  }
+  if (file.type.startsWith("video/")) {
+    return "VIDEO";
+  }
+  if (file.type.startsWith("audio/")) {
+    return "MUSIC";
+  }
+  return "SCRIPT";
+}
+
+async function readFileForScriptContext(file: File): Promise<Pick<SupplementalFileInput, "extractedText" | "imageDataUrl">> {
+  if (file.type.startsWith("image/")) {
+    return { imageDataUrl: await readFileAsDataUrl(file) };
+  }
+
+  if (isTextLikeFile(file)) {
+    return { extractedText: (await file.text()).slice(0, 12000) };
+  }
+
+  return {};
+}
+
+function isTextLikeFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return file.type.startsWith("text/")
+    || ["application/json", "application/xml", "image/svg+xml"].includes(file.type)
+    || [".txt", ".md", ".csv", ".json", ".xml", ".svg"].some((extension) => lowerName.endsWith(extension));
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(size: number) {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const providerServiceTypes = [
   { type: "SCRIPT", label: "תסריט", description: "מודלי AI לכתיבת תסריטים וחלוקה לסצנות.", presets: [["gemini", "Gemini Script Writer"], ["openai", "OpenAI Script Writer"], ["anthropic", "Claude Script Writer"]] },
   { type: "MEDIA", label: "מדיה", description: "חיפוש ושליפת תמונות ווידאו ממאגרים.", presets: [["pexels", "Pexels Media Search"], ["shutterstock", "Shutterstock"], ["unsplash", "Unsplash"]] },
   { type: "VOICE", label: "קול", description: "TTS, קריינות וקבצי קול לסרטונים.", presets: [["openverse", "Openverse Audio Search"], ["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
   { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע, קבצי קול וספריות סאונד.", presets: [["openverse", "Openverse Audio Search"], ["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
   { type: "AVATAR", label: "אווטרים", description: "יצירת דמויות/דוברים וירטואליים.", presets: [["heygen", "HeyGen"], ["did", "D-ID"], ["synthesia", "Synthesia"]] },
-  { type: "VIDEO", label: "יצירת וידאו", description: "מחוללי וידאו AI ליצירת קליפים לכל סצנה.", presets: [["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
+  { type: "VIDEO", label: "יצירת וידאו", description: "רינדור או יצירת קליפים לכל סצנה. Shotstack מרנדר כל בקשה כמקטע של 5 שניות.", presets: [["shotstack", "Shotstack 5 Second Renderer"], ["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
   { type: "MERGE", label: "מיזוג", description: "חיבור סצנות, כתוביות, watermark ו־transitions.", presets: [["ffmpeg", "Self-hosted FFmpeg"], ["shotstack", "Shotstack"], ["creatomate", "Creatomate"]] },
   { type: "STORAGE", label: "אחסון", description: "שמירת קבצים ותוצרים סופיים.", presets: [["local", "Local Storage"], ["cloudflare-r2", "Cloudflare R2"], ["s3", "AWS S3"], ["cloudinary", "Cloudinary"]] },
   { type: "DISTRIBUTION", label: "הפצה", description: "פרסום לרשתות, webhooks וערוצי יציאה.", presets: [["youtube", "YouTube"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["linkedin", "LinkedIn"]] }

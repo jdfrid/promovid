@@ -3,6 +3,8 @@ import type { SceneInput } from "@promovid/shared";
 interface ScriptRequest {
   title: string;
   sourceText: string;
+  supplementalLinks?: string[];
+  supplementalFiles?: SupplementalFile[];
   duration: number;
   style?: string;
   targetAudience?: string;
@@ -20,9 +22,20 @@ interface ScriptProviderSettings {
 interface SourceContext {
   rawInput: string;
   url?: string;
+  urls?: string[];
   instructions: string;
   pageText?: string;
+  supplementalText?: string;
   fetchError?: string;
+}
+
+interface SupplementalFile {
+  name: string;
+  mimeType?: string;
+  assetType?: string;
+  assetUrl?: string;
+  extractedText?: string;
+  imageDataUrl?: string;
 }
 
 type OperationLogger = (...args: [string, string, Record<string, unknown>?]) => void;
@@ -64,7 +77,7 @@ export interface ScriptAnalysisResult {
 }
 
 export async function generateScript(request: ScriptRequest): Promise<ScriptGenerationResult> {
-  const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
+  const sourceContext = await buildSourceContext(request.sourceText, request.onLog, request.supplementalLinks, request.supplementalFiles);
   if (request.provider) {
     if (!request.provider.apiKey) {
       throw new Error(`Script provider ${request.provider.provider} is enabled but has no API key.`);
@@ -77,8 +90,8 @@ export async function generateScript(request: ScriptRequest): Promise<ScriptGene
     throw new Error(`Script provider ${request.provider.provider} is not implemented yet.`);
   }
 
-  const sceneCount = Math.max(2, Math.ceil(request.duration / 8));
-  const cleanSource = sourceContext.pageText || sourceContext.instructions || sourceContext.rawInput;
+  const sceneCount = Math.max(1, Math.ceil(request.duration / 5));
+  const cleanSource = sourceContext.pageText || sourceContext.supplementalText || sourceContext.instructions || sourceContext.rawInput;
   const style = request.style || "modern, clear, conversion-oriented";
   const audience = request.targetAudience || "general audience";
 
@@ -95,7 +108,7 @@ export async function generateScript(request: ScriptRequest): Promise<ScriptGene
 }
 
 export async function analyzeScript(request: ScriptRequest & { scenes: SceneInput[] }): Promise<ScriptAnalysisResult> {
-  const sourceContext = await buildSourceContext(request.sourceText, request.onLog);
+  const sourceContext = await buildSourceContext(request.sourceText, request.onLog, request.supplementalLinks, request.supplementalFiles);
   if (request.provider) {
     if (!request.provider.apiKey) {
       throw new Error(`Script analysis provider ${request.provider.provider} is enabled but has no API key.`);
@@ -186,11 +199,14 @@ async function generateGeminiScript(
 ): Promise<ScriptGenerationResult> {
   const model = normalizeGeminiModel(readConfigValue(provider.config, "model") ?? "gemini-2.5-flash-lite");
   const prompt = buildGeminiPrompt(request, sourceContext);
+  const imageParts = buildGeminiImageParts(request.supplementalFiles);
   request.onLog?.("gemini_prompt_ready", "נבנה prompt מפורט עבור Gemini", {
     model,
     promptLength: prompt.length,
     hasUrl: Boolean(sourceContext.url),
-    hasPageText: Boolean(sourceContext.pageText)
+    urlCount: sourceContext.urls?.length ?? 0,
+    hasPageText: Boolean(sourceContext.pageText),
+    inlineImageCount: imageParts.length
   });
   request.onLog?.("gemini_request_start", "שולח בקשה ל-Gemini ליצירת תסריט", { model });
   const response = await fetch(
@@ -202,7 +218,7 @@ async function generateGeminiScript(
         contents: [
           {
             role: "user",
-            parts: [{ text: prompt }]
+            parts: [{ text: prompt }, ...imageParts]
           }
         ],
         generationConfig: {
@@ -238,7 +254,7 @@ async function generateGeminiScript(
 }
 
 function buildGeminiPrompt(request: ScriptRequest, sourceContext: SourceContext) {
-  const sceneCount = Math.max(2, Math.ceil(request.duration / 8));
+  const sceneCount = Math.max(1, Math.ceil(request.duration / 5));
   return `
 אתה מחולל תסריטי פרסומת מקצועי לווידאו קצר.
 
@@ -250,7 +266,7 @@ function buildGeminiPrompt(request: ScriptRequest, sourceContext: SourceContext)
 - כותרת: ${request.title}
 - אורך כולל: ${request.duration} שניות
 - מספר סצנות רצוי: ${sceneCount}
-- כל סצנה חייבת להיות באורך 7-8 שניות, למעט התאמה קטנה כדי להגיע לאורך הכולל.
+- כל סצנה חייבת להיות באורך 5 שניות בדיוק. Shotstack יקבל כל פעם מקטע של 5 שניות לרינדור.
 - יחס תצוגה: ${request.aspectRatio ?? "9:16"}
 - סגנון: ${request.style || "חד, מודרני, מכירתי"}
 - קהל יעד: ${request.targetAudience || "לקוחות חדשים"}
@@ -263,6 +279,9 @@ ${sourceContext.instructions || "לא סופקו הוראות נוספות מע�
 
 תוכן שחולץ מעמוד האינטרנט:
 ${sourceContext.pageText || sourceContext.fetchError || "לא סופק או לא ניתן היה לחלץ תוכן מהעמוד."}
+
+קבצים, תמונות וקישורים נוספים שהועלו ב-Pre-Production:
+${sourceContext.supplementalText || "לא הועלו קבצים/תמונות/קישורים נוספים."}
 
 קלט גולמי מלא:
 ${sourceContext.rawInput}
@@ -278,7 +297,7 @@ ${sourceContext.rawInput}
       "title": "שם קצר לסצנה",
       "narration": "טקסט קריינות מלא ומוכן להקראה עבור הסצנה",
       "visualPrompt": "English-only concise media search prompt with concrete product/category, setting, mood, and camera subject",
-      "durationSeconds": 8
+      "durationSeconds": 5
     }
   ]
 }
@@ -315,6 +334,9 @@ ${sourceContext.instructions || sourceContext.rawInput}
 
 תוכן שחולץ מהעמוד:
 ${sourceContext.pageText || sourceContext.fetchError || "לא זמין"}
+
+קבצים, תמונות וקישורים נוספים:
+${sourceContext.supplementalText || "לא הועלו קבצים/תמונות/קישורים נוספים."}
 
 התסריט:
 ${JSON.stringify(request.scenes, null, 2)}
@@ -466,44 +488,90 @@ function normalizeTimeline(
   ];
 }
 
-async function buildSourceContext(rawInput: string, onLog?: OperationLogger): Promise<SourceContext> {
-  const url = extractFirstUrl(rawInput);
-  const instructions = url ? rawInput.replace(url, "").trim() : rawInput.trim();
+async function buildSourceContext(
+  rawInput: string,
+  onLog?: OperationLogger,
+  supplementalLinks: string[] = [],
+  supplementalFiles: SupplementalFile[] = []
+): Promise<SourceContext> {
+  const urls = Array.from(new Set([...extractUrls(rawInput), ...supplementalLinks]));
+  const instructions = urls.reduce((value, url) => value.replace(url, ""), rawInput).trim();
+  const supplementalText = buildSupplementalText(supplementalLinks, supplementalFiles);
   onLog?.("source_input_received", "התקבל פריט מידע מהמסך", {
     inputLength: rawInput.length,
-    hasUrl: Boolean(url),
-    instructionsLength: instructions.length
+    hasUrl: urls.length > 0,
+    urlCount: urls.length,
+    instructionsLength: instructions.length,
+    supplementalFileCount: supplementalFiles.length
   });
 
-  if (!url) {
-    return { rawInput, instructions };
+  if (urls.length === 0) {
+    return { rawInput, instructions, supplementalText };
   }
 
   try {
-    onLog?.("source_url_fetch_start", "מתחיל לקרוא תוכן מעמוד URL", { url });
-    const pageText = await fetchPageText(url);
-    onLog?.("source_url_fetch_success", "תוכן העמוד נקרא בהצלחה", {
+    onLog?.("source_url_fetch_start", "מתחיל לקרוא תוכן מקישורי URL", { urls });
+    const settledResults = await Promise.allSettled(urls.slice(0, 6).map(async (url) => ({
       url,
+      pageText: await fetchPageText(url)
+    })));
+    const results = settledResults
+      .filter((result): result is PromiseFulfilledResult<{ url: string; pageText: string }> => result.status === "fulfilled")
+      .map((result) => result.value);
+    if (results.length === 0) {
+      const firstError = settledResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      throw new Error(firstError?.reason instanceof Error ? firstError.reason.message : "all URL fetches failed");
+    }
+    const pageText = results.map((result) => `URL: ${result.url}\n${result.pageText}`).join("\n\n").slice(0, 18000);
+    onLog?.("source_url_fetch_success", "תוכן הקישורים נקרא בהצלחה", {
+      urlCount: results.length,
       extractedCharacters: pageText.length
     });
-    return { rawInput, url, instructions, pageText };
+    return { rawInput, url: urls[0], urls, instructions, pageText, supplementalText };
   } catch (error) {
-    onLog?.("source_url_fetch_failed", "קריאת תוכן העמוד נכשלה, ממשיך עם URL והוראות", {
-      url,
+    onLog?.("source_url_fetch_failed", "קריאת תוכן הקישורים נכשלה, ממשיך עם URL והוראות", {
+      urls,
       error: error instanceof Error ? error.message : "unknown error"
     });
     return {
       rawInput,
-      url,
+      url: urls[0],
+      urls,
       instructions,
+      supplementalText,
       fetchError: `לא ניתן היה לקרוא את תוכן העמוד: ${error instanceof Error ? error.message : "unknown error"}`
     };
   }
 }
 
-function extractFirstUrl(value: string) {
-  const match = value.match(/https?:\/\/[^\s<>"']+/i);
-  return match?.[0]?.replace(/[),.]+$/g, "");
+function buildSupplementalText(supplementalLinks: string[], supplementalFiles: SupplementalFile[]) {
+  const sections = [
+    supplementalLinks.length
+      ? [
+        "Additional links:",
+        ...supplementalLinks.map((link, index) => `${index + 1}. ${link}`)
+      ].join("\n")
+      : undefined,
+    supplementalFiles.length
+      ? [
+        "Uploaded files and visual references:",
+        ...supplementalFiles.map((file, index) => [
+          `${index + 1}. ${file.name}`,
+          file.mimeType ? `MIME type: ${file.mimeType}` : undefined,
+          file.assetType ? `Asset type: ${file.assetType}` : undefined,
+          file.assetUrl ? `Stored asset URL: ${file.assetUrl}` : undefined,
+          file.extractedText ? `Extracted file text:\n${file.extractedText.slice(0, 4000)}` : undefined,
+          file.imageDataUrl ? "This uploaded image is attached inline to Gemini. Use it as a visual/product reference." : undefined
+        ].filter(Boolean).join("\n"))
+      ].join("\n\n")
+      : undefined
+  ];
+  return sections.filter(Boolean).join("\n\n") || undefined;
+}
+
+function extractUrls(value: string) {
+  return Array.from(value.matchAll(/https?:\/\/[^\s<>"']+/gi))
+    .map((match) => match[0].replace(/[),.]+$/g, ""));
 }
 
 async function fetchPageText(url: string) {
@@ -556,12 +624,13 @@ function normalizeScriptResponse(
   parsed: { scenes?: SceneInput[]; backgroundVideoPrompt?: string; musicPrompt?: string } | SceneInput[],
   totalDuration: number
 ): ScriptGenerationResult {
-  const scenes = Array.isArray(parsed) ? parsed : parsed.scenes ?? [];
-  if (scenes.length === 0) {
+  const parsedScenes = Array.isArray(parsed) ? parsed : parsed.scenes ?? [];
+  if (parsedScenes.length === 0) {
     throw new Error("Gemini returned no script scenes.");
   }
 
-  const durations = distributeDurations(totalDuration, scenes.length);
+  const durations = distributeDurations(totalDuration, parsedScenes.length);
+  const scenes = expandScenesToFiveSecondSegments(parsedScenes, durations.length);
   return {
     backgroundVideoPrompt: Array.isArray(parsed) ? undefined : parsed.backgroundVideoPrompt,
     musicPrompt: Array.isArray(parsed) ? undefined : parsed.musicPrompt,
@@ -574,18 +643,56 @@ function normalizeScriptResponse(
   };
 }
 
-function clampDuration(duration: number) {
-  return Math.min(8, Math.max(7, Math.round(duration)));
+function expandScenesToFiveSecondSegments(scenes: SceneInput[], targetCount: number) {
+  if (scenes.length >= targetCount) {
+    return scenes.slice(0, targetCount);
+  }
+
+  return Array.from({ length: targetCount }, (_, index) => {
+    const source = scenes[Math.min(index, scenes.length - 1)];
+    return {
+      ...source,
+      title: `${source.title || "Scene"} ${index + 1}/${targetCount}`
+    };
+  });
+}
+
+function clampDuration(_duration: number) {
+  return 5;
 }
 
 function distributeDurations(totalDuration: number, sceneCount: number) {
-  const base = Math.floor(totalDuration / sceneCount);
-  let remainder = totalDuration - base * sceneCount;
-  return Array.from({ length: sceneCount }, () => {
-    const duration = clampDuration(base + (remainder > 0 ? 1 : 0));
-    remainder -= 1;
-    return duration;
-  });
+  const neededScenes = Math.max(sceneCount, Math.ceil(totalDuration / 5));
+  return Array.from({ length: neededScenes }, () => 5);
+}
+
+function buildGeminiImageParts(files: SupplementalFile[] = []) {
+  return files
+    .filter((file) => file.imageDataUrl && file.mimeType?.startsWith("image/"))
+    .slice(0, 4)
+    .map((file) => {
+      const parsed = parseDataUrl(file.imageDataUrl ?? "");
+      return parsed
+        ? {
+          inlineData: {
+            mimeType: parsed.mimeType,
+            data: parsed.data
+          }
+        }
+        : undefined;
+    })
+    .filter((part): part is { inlineData: { mimeType: string; data: string } } => Boolean(part));
+}
+
+function parseDataUrl(dataUrl: string) {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    mimeType: match[1],
+    data: match[2]
+  };
 }
 
 function readConfigValue(config: unknown, key: string) {

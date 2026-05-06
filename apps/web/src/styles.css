@@ -298,6 +298,32 @@ textarea {
   resize: vertical;
 }
 
+.supporting-inputs {
+  border: 1px solid rgba(109, 93, 252, 0.35);
+  border-radius: 18px;
+  background: rgba(109, 93, 252, 0.08);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.supporting-inputs textarea {
+  min-height: 90px;
+}
+
+.file-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-chip-list span {
+  border-radius: 999px;
+  background: #252b45;
+  color: #dfe2ff;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+}
+
 .row,
 .upload {
   display: grid;
