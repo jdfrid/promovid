@@ -171,8 +171,9 @@ async function generateWithShotstack(input: {
   }
 
   const config = asRecord(input.provider.config);
-  const version = stringConfig(config.version) ?? "stage";
-  const baseUrl = normalizeShotstackBaseUrl(stringConfig(config.baseUrl) ?? stringConfig(config.endpoint) ?? `https://api.shotstack.io/edit/${version}`);
+  const configuredBaseUrl = stringConfig(config.baseUrl) ?? stringConfig(config.endpoint);
+  const version = stringConfig(config.version) ?? "v1";
+  let baseUrl = normalizeShotstackBaseUrl(configuredBaseUrl ?? `https://api.shotstack.io/edit/${version}`);
   const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 240;
   const voice = stringConfig(config.voice) ?? "Matthew";
   const language = stringConfig(config.language) ?? "en-US";
@@ -186,23 +187,25 @@ async function generateWithShotstack(input: {
     hasReferenceMedia: Boolean(input.referenceMediaUrl)
   });
 
-  const response = await fetchWithTimeout(`${baseUrl}/render`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-      "x-api-key": apiKey
-    },
-    body: JSON.stringify(buildShotstackEdit({
-      scene: input.scene,
-      referenceMediaUrl: input.referenceMediaUrl,
-      aspectRatio: input.aspectRatio,
-      length: renderLength,
-      voice,
-      language
-    }))
-  }, 30_000);
-  const payload = await readJson(response);
+  const edit = buildShotstackEdit({
+    scene: input.scene,
+    referenceMediaUrl: input.referenceMediaUrl,
+    aspectRatio: input.aspectRatio,
+    length: renderLength,
+    voice,
+    language
+  });
+  let { response, payload } = await createShotstackRender({ baseUrl, apiKey, edit });
+  if (!response.ok && !configuredBaseUrl && shouldRetryShotstackEnvironment(payload)) {
+    const retryVersion = version === "stage" ? "v1" : "stage";
+    baseUrl = `https://api.shotstack.io/edit/${retryVersion}`;
+    await input.onLog?.("shotstack_render_environment_retry", "Shotstack החזיר שגיאת סביבת API key; מנסה endpoint חלופי", {
+      sceneId: input.scene.id,
+      originalVersion: version,
+      retryVersion
+    });
+    ({ response, payload } = await createShotstackRender({ baseUrl, apiKey, edit }));
+  }
   if (!response.ok) {
     throw new Error(`Shotstack render request failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
   }
@@ -474,6 +477,34 @@ async function pollShotstackRender(input: {
   }
 
   throw new Error(`Shotstack render timed out after ${input.timeoutSeconds} seconds`);
+}
+
+async function createShotstackRender(input: {
+  baseUrl: string;
+  apiKey: string;
+  edit: Record<string, unknown>;
+}) {
+  const response = await fetchWithTimeout(`${input.baseUrl}/render`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "x-api-key": input.apiKey
+    },
+    body: JSON.stringify(input.edit)
+  }, 30_000);
+  return {
+    response,
+    payload: await readJson(response)
+  };
+}
+
+function shouldRetryShotstackEnvironment(payload: Record<string, unknown>) {
+  const text = JSON.stringify(payload).toLowerCase();
+  return text.includes("production environment")
+    || text.includes("sandbox api")
+    || text.includes("sandbox environment")
+    || text.includes("production api");
 }
 
 function buildShotstackEdit(input: {

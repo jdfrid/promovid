@@ -56,17 +56,30 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
     const providers = await prisma.providerCredential.findMany({
       where: {
         tenantId: data.tenantId,
-        type: "VIDEO",
-        enabled: true
+        enabled: true,
+        OR: [
+          { type: "VIDEO" },
+          { type: "MERGE", provider: { contains: "shotstack", mode: "insensitive" } }
+        ]
       },
       orderBy: [{ type: "asc" }, { priority: "asc" }]
     });
+    const shotstackProviders = orderVideoProviders(providers.filter((provider) => provider.provider.toLowerCase().includes("shotstack")));
+    const ignoredVideoProviders = providers.filter((provider) => provider.type === "VIDEO" && !provider.provider.toLowerCase().includes("shotstack"));
     const providersByType = {
-      VIDEO: providers.filter((provider) => provider.type === "VIDEO")
+      VIDEO: shotstackProviders
     };
 
     await log("providers_loaded", "נטענו ספקי וידאו פעילים לשלב הרינדור", {
-      video: providersByType.VIDEO.length
+      video: providersByType.VIDEO.length,
+      selectedRenderer: "shotstack",
+      providers: providersByType.VIDEO.map((provider) => ({
+        type: provider.type,
+        provider: provider.provider,
+        priority: provider.priority,
+        hasKey: Boolean(provider.encryptedKey)
+      })),
+      ignoredVideoProviders: ignoredVideoProviders.map((provider) => provider.provider)
     });
 
     const orderedScenes = [...project.scenes].sort((a, b) => a.order - b.order);
@@ -255,6 +268,17 @@ async function shutdown(signal: string) {
     console.error("AdBot render worker shutdown failed", error);
     process.exit(1);
   }
+}
+
+function orderVideoProviders<T extends { provider: string; priority: number }>(providers: T[]) {
+  return [...providers].sort((left, right) => {
+    const leftIsShotstack = left.provider.toLowerCase().includes("shotstack");
+    const rightIsShotstack = right.provider.toLowerCase().includes("shotstack");
+    if (leftIsShotstack !== rightIsShotstack) {
+      return leftIsShotstack ? -1 : 1;
+    }
+    return left.priority - right.priority;
+  });
 }
 
 async function withStageTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
