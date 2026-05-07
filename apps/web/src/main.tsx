@@ -1221,6 +1221,8 @@ type ProviderFormState = {
   temperature: number;
   endpoint: string;
   timeoutSeconds: number;
+  shotstackResolution: string;
+  shotstackTextToSpeech: boolean;
 };
 
 function providerConfigForForm(activeType: string, form: ProviderFormState) {
@@ -1234,7 +1236,9 @@ function providerConfigForForm(activeType: string, form: ProviderFormState) {
   if (activeType === "VIDEO") {
     return {
       endpoint: form.endpoint.trim(),
-      timeoutSeconds: Number(form.timeoutSeconds)
+      timeoutSeconds: Number(form.timeoutSeconds),
+      resolution: form.shotstackResolution,
+      textToSpeech: form.shotstackTextToSpeech
     };
   }
 
@@ -1257,7 +1261,9 @@ function Settings() {
     model: "gemini-2.5-flash-lite",
     temperature: 0.7,
     endpoint: "",
-    timeoutSeconds: 180
+    timeoutSeconds: 180,
+    shotstackResolution: "sd",
+    shotstackTextToSpeech: true
   });
   useEffect(() => {
     void apiGet<Provider[]>("/settings/services").then(setProviders);
@@ -1289,7 +1295,9 @@ function Settings() {
         model: "gemini-2.5-flash-lite",
         temperature: 0.7,
         endpoint: "",
-        timeoutSeconds: 180
+        timeoutSeconds: 180,
+        shotstackResolution: "sd",
+        shotstackTextToSpeech: true
       });
       return;
     }
@@ -1307,7 +1315,9 @@ function Settings() {
         model: typeof provider.config?.model === "string" ? provider.config.model : "gemini-2.5-flash-lite",
         temperature: Number(provider.config?.temperature ?? 0.7),
         endpoint: typeof provider.config?.endpoint === "string" ? provider.config.endpoint : "",
-        timeoutSeconds: Number(provider.config?.timeoutSeconds ?? 180)
+        timeoutSeconds: Number(provider.config?.timeoutSeconds ?? 180),
+        shotstackResolution: typeof provider.config?.resolution === "string" ? provider.config.resolution : "sd",
+        shotstackTextToSpeech: typeof provider.config?.textToSpeech === "boolean" ? provider.config.textToSpeech : true
       });
     }
   }
@@ -1365,7 +1375,9 @@ function Settings() {
                 model: "gemini-2.5-flash-lite",
                 temperature: 0.7,
                 endpoint: "",
-                timeoutSeconds: 180
+                timeoutSeconds: 180,
+                shotstackResolution: "sd",
+                shotstackTextToSpeech: true
               });
             }}
           >
@@ -1428,7 +1440,18 @@ function Settings() {
               <label>Timeout בשניות
                 <input type="number" min="30" max="900" step="10" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: Number(event.target.value) })} />
               </label>
-              <p className="muted">Runway מופעל ישירות עם ה־API Key. עבור Kling/Gemini/Veo אפשר להגדיר endpoint שמקבל prompt ו-referenceMediaUrl ומחזיר JSON עם videoUrl.</p>
+              <label>Shotstack · רזולוציה (חיסכון בקרדיטים)
+                <select value={form.shotstackResolution} onChange={(event) => setForm({ ...form, shotstackResolution: event.target.value })}>
+                  <option value="sd">SD (ברירת מחדל, זול יותר)</option>
+                  <option value="hd">HD</option>
+                  <option value="preview">Preview</option>
+                </select>
+              </label>
+              <label className="checkbox-label">
+                <input type="checkbox" checked={form.shotstackTextToSpeech} onChange={(event) => setForm({ ...form, shotstackTextToSpeech: event.target.checked })} />
+                Shotstack · דיבור מובנה (TTS) בסרטון
+              </label>
+              <p className="muted">Shotstack: ברירת המחדל היא SD ומקטעים של 5 שניות. ללא TTS אפשר להסתמך על קובץ קול מהאיסוף (מוזג ב־FFmpeg אחרי הרינדור). Runway/Kling/Gemini דורשים endpoint או מפתח מתאים.</p>
             </div>
           )}
           <div className="row compact-row">
@@ -1451,7 +1474,7 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180 });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180, shotstackResolution: "sd", shotstackTextToSpeech: true });
               }}>
                 {displayName}
               </button>

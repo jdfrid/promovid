@@ -84,6 +84,7 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
 
     const orderedScenes = [...project.scenes].sort((a, b) => a.order - b.order);
     const renderedClipPaths: string[] = [];
+    const failedScenes: Array<{ sceneId: string; scene: number; error: string }> = [];
     for (const [index, scene] of orderedScenes.entries()) {
       const baseProgress = 10 + Math.round((index / Math.max(orderedScenes.length, 1)) * 70);
       await prisma.renderJob.update({
@@ -103,76 +104,119 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
         data: { progress: Math.min(baseProgress + 8, 85), stage: `scene_${index + 1}_video_generation` }
       });
       await log("scene_video_generation_started", "מתחיל יצירת קליפ וידאו חדש לסצנה", { sceneId: scene.id, scene: index + 1 });
-      const clip = await withStageTimeout(
-        generateSceneVideo({
-          project,
+      try {
+        const clip = await withStageTimeout(
+          generateSceneVideo({
+            project,
+            scene,
+            videoProviders: providersByType.VIDEO,
+            referenceMediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl ?? undefined,
+            aspectRatio: project.aspectRatio,
+            onLog: log
+          }),
+          150_000,
+          `Scene ${index + 1} video generation timed out after 150 seconds`
+        );
+        const clipWithAudioPath = await addAudioToClip({
+          projectId: project.id,
           scene,
-          videoProviders: providersByType.VIDEO,
-          referenceMediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl ?? undefined,
-          aspectRatio: project.aspectRatio,
+          videoPath: clip.outputPath,
+          musicUrl: scene.musicUrl,
+          voiceUrl: scene.voiceUrl,
           onLog: log
-        }),
-        150_000,
-        `Scene ${index + 1} video generation timed out after 150 seconds`
-      );
-      const clipWithAudioPath = await addAudioToClip({
-        projectId: project.id,
-        scene,
-        videoPath: clip.outputPath,
-        musicUrl: scene.musicUrl,
-        voiceUrl: scene.voiceUrl,
-        onLog: log
-      });
-      renderedClipPaths.push(clipWithAudioPath);
-      const clipFile = await storeRenderFile({
-        tenantId: data.tenantId,
-        projectId: project.id,
-        sceneId: scene.id,
-        renderJobId: jobId,
-        filePath: clipWithAudioPath
-      });
+        });
+        renderedClipPaths.push(clipWithAudioPath);
+        const clipFile = await storeRenderFile({
+          tenantId: data.tenantId,
+          projectId: project.id,
+          sceneId: scene.id,
+          renderJobId: jobId,
+          filePath: clipWithAudioPath
+        });
 
-      await prisma.scene.update({
-        where: { id: scene.id },
-        data: {
-          clipUrl: `/api/render-files/${clipFile.id}`,
-          referenceMediaUrl: clip.referenceMediaUrl,
-          generatedVideoUrl: clip.generatedVideoUrl ?? `/api/render-files/${clipFile.id}`,
+        await prisma.scene.update({
+          where: { id: scene.id },
+          data: {
+            clipUrl: `/api/render-files/${clipFile.id}`,
+            referenceMediaUrl: clip.referenceMediaUrl,
+            generatedVideoUrl: clip.generatedVideoUrl ?? `/api/render-files/${clipFile.id}`,
+            videoProvider: clip.videoProvider,
+            videoPrompt: clip.videoPrompt,
+            generationStatus: clip.generationStatus,
+            renderLog: {
+              packageAssets: {
+                mediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl,
+                voiceUrl: scene.voiceUrl,
+                musicUrl: scene.musicUrl
+              },
+              video: {
+                provider: clip.videoProvider,
+                prompt: clip.videoPrompt,
+                referenceMediaUrl: clip.referenceMediaUrl,
+                generatedVideoUrl: clip.generatedVideoUrl,
+                generationStatus: clip.generationStatus,
+                fallbackReason: clip.fallbackReason
+              }
+            } as Prisma.InputJsonValue
+          }
+        });
+        await log("scene_video_generation_completed", "קליפ הסצנה מוכן להורדה", {
+          sceneId: scene.id,
+          scene: index + 1,
           videoProvider: clip.videoProvider,
-          videoPrompt: clip.videoPrompt,
           generationStatus: clip.generationStatus,
-          renderLog: {
-            packageAssets: {
-              mediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl,
-              voiceUrl: scene.voiceUrl,
-              musicUrl: scene.musicUrl
-            },
-            video: {
-              provider: clip.videoProvider,
-              prompt: clip.videoPrompt,
-              referenceMediaUrl: clip.referenceMediaUrl,
-              generatedVideoUrl: clip.generatedVideoUrl,
-              generationStatus: clip.generationStatus,
-              fallbackReason: clip.fallbackReason
-            }
-          } as Prisma.InputJsonValue
+          clipUrl: `/api/render-files/${clipFile.id}`,
+          sizeBytes: clipFile.sizeBytes
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Scene video generation failed";
+        failedScenes.push({ sceneId: scene.id, scene: index + 1, error: message });
+        await prisma.scene.update({
+          where: { id: scene.id },
+          data: {
+            generationStatus: "failed",
+            renderLog: {
+              packageAssets: {
+                mediaUrl: scene.referenceMediaUrl ?? scene.mediaUrl,
+                voiceUrl: scene.voiceUrl,
+                musicUrl: scene.musicUrl
+              },
+              video: {
+                generationStatus: "failed",
+                error: message
+              }
+            } as Prisma.InputJsonValue
+          }
+        });
+        await log("scene_video_generation_failed", "סצנה נכשלה; שומר את הקליפים שהצליחו וממשיך לפי האפשר", {
+          sceneId: scene.id,
+          scene: index + 1,
+          error: message
+        });
+        if (isProviderPlanLimitError(message)) {
+          await log("render_provider_plan_limit_reached", "Shotstack עצר בגלל מגבלת קרדיטים; מפסיק לשלוח סצנות נוספות ומחבר תוצרים קיימים", {
+            sceneId: scene.id,
+            scene: index + 1,
+            renderedClipCount: renderedClipPaths.length
+          });
+          break;
         }
-      });
-      await log("scene_video_generation_completed", "קליפ הסצנה מוכן להורדה", {
-        sceneId: scene.id,
-        scene: index + 1,
-        videoProvider: clip.videoProvider,
-        generationStatus: clip.generationStatus,
-        clipUrl: `/api/render-files/${clipFile.id}`,
-        sizeBytes: clipFile.sizeBytes
-      });
+      }
+    }
+
+    if (renderedClipPaths.length === 0) {
+      throw new Error(failedScenes[0]?.error ?? "No scene clips were generated");
     }
 
     await prisma.renderJob.update({
       where: { id: jobId },
       data: { progress: 88, stage: "merge_final_video" }
     });
-    await log("final_render_started", "מרנדר סרטון סופי מאוחד", { sceneCount: orderedScenes.length });
+    await log("final_render_started", failedScenes.length ? "מרנדר סרטון סופי חלקי מהקליפים שהצליחו" : "מרנדר סרטון סופי מאוחד", {
+      sceneCount: orderedScenes.length,
+      renderedClipCount: renderedClipPaths.length,
+      failedSceneCount: failedScenes.length
+    });
 
     const output = await mergeSceneClips({
       projectId: project.id,
@@ -195,7 +239,8 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
           status: "COMPLETED",
           progress: 100,
           outputUrl: `/api/render-files/${finalFile.id}`,
-          stage: "completed"
+          stage: failedScenes.length ? "completed_with_scene_errors" : "completed",
+          error: failedScenes.length ? `${failedScenes.length} scene(s) failed. Final video contains ${renderedClipPaths.length} successful clip(s).` : null
         }
       }),
       prisma.project.update({
@@ -203,9 +248,10 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
         data: { status: "COMPLETED" }
       })
     ]);
-    await log("render_job_completed", "כל הסרטונים מוכנים להורדה", {
+    await log("render_job_completed", failedScenes.length ? "הופק תוצר חלקי להורדה מהקליפים שהצליחו" : "כל הסרטונים מוכנים להורדה", {
       outputUrl: `/api/render-files/${finalFile.id}`,
-      sizeBytes: finalFile.sizeBytes
+      sizeBytes: finalFile.sizeBytes,
+      failedScenes
     });
 }
 
@@ -279,6 +325,19 @@ function orderVideoProviders<T extends { provider: string; priority: number }>(p
     }
     return left.priority - right.priority;
   });
+}
+
+function isProviderPlanLimitError(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes("credits exhausted")
+    || normalized.includes("credits required")
+    || normalized.includes("credits left")
+    || normalized.includes("plan limit")
+    || normalized.includes("plan limits")
+    || normalized.includes("exceeds one or more plan limits")
+    || normalized.includes("upgrade to increase your plan limits")
+    || message.includes("חסרים קרדיטים")
+    || message.includes("מגבלת התוכנית");
 }
 
 async function withStageTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {

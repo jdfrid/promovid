@@ -33,6 +33,7 @@ export async function generateSceneVideo(input: {
     referenceMediaUrl: input.referenceMediaUrl
   });
 
+  let lastProviderError: string | undefined;
   for (const provider of input.videoProviders) {
     const providerName = provider.provider.toLowerCase();
     await input.onLog?.("video_provider_attempt", "מנסה ליצור וידאו אמיתי דרך ספק VIDEO", {
@@ -87,10 +88,11 @@ export async function generateSceneVideo(input: {
         supportedHint: videoProviderHint(providerName)
       });
     } catch (error) {
+      lastProviderError = error instanceof Error ? error.message : String(error);
       await input.onLog?.("video_provider_failed", "ספק VIDEO נכשל, ממשיך לספק הבא או ל-fallback", {
         sceneId: input.scene.id,
         provider: provider.provider,
-        error: error instanceof Error ? error.message : "unknown video provider error"
+        error: lastProviderError
       });
     }
   }
@@ -101,9 +103,11 @@ export async function generateSceneVideo(input: {
   if (!isFfmpegFallbackAllowed(input.videoProviders)) {
     await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי ולכן הרינדור נעצר במקום לייצר סרטון טקסט לא קשור", {
       sceneId: input.scene.id,
-      fallbackReason
+      fallbackReason,
+      lastProviderError
     });
-    throw new Error(`True video generation failed for scene ${input.scene.order + 1}: ${fallbackReason}. Configure an active VIDEO provider with a working endpoint/API key, or explicitly enable FFmpeg fallback in the VIDEO provider config with allowFfmpegFallback=true.`);
+    const detail = lastProviderError ?? fallbackReason;
+    throw new Error(`True video generation failed for scene ${input.scene.order + 1}: ${detail}. Configure an active VIDEO provider with a working endpoint/API key, top up Shotstack credits if you see a plan-limit message, or explicitly enable FFmpeg fallback in the VIDEO provider config with allowFfmpegFallback=true.`);
   }
 
   await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי; מפעיל fallback ברור של FFmpeg לפי הגדרת ספק", {
@@ -178,12 +182,17 @@ async function generateWithShotstack(input: {
   const voice = stringConfig(config.voice) ?? "Matthew";
   const language = stringConfig(config.language) ?? "en-US";
   const renderLength = SHOTSTACK_SEGMENT_SECONDS;
+  const resolutionRaw = stringConfig(config.resolution)?.toLowerCase();
+  const resolution = resolutionRaw === "hd" || resolutionRaw === "preview" ? resolutionRaw : "sd";
+  const textToSpeech = config.textToSpeech !== false;
 
   await input.onLog?.("shotstack_render_request_sent", "נשלחה בקשת Shotstack לרינדור מקטע של 5 שניות", {
     provider: input.provider.provider,
     sceneId: input.scene.id,
     renderLength,
     version,
+    resolution,
+    textToSpeech,
     hasReferenceMedia: Boolean(input.referenceMediaUrl)
   });
 
@@ -193,7 +202,9 @@ async function generateWithShotstack(input: {
     aspectRatio: input.aspectRatio,
     length: renderLength,
     voice,
-    language
+    language,
+    resolution,
+    textToSpeech
   });
   let { response, payload } = await createShotstackRender({ baseUrl, apiKey, edit });
   if (!response.ok && !configuredBaseUrl && shouldRetryShotstackEnvironment(payload)) {
@@ -207,7 +218,7 @@ async function generateWithShotstack(input: {
     ({ response, payload } = await createShotstackRender({ baseUrl, apiKey, edit }));
   }
   if (!response.ok) {
-    throw new Error(`Shotstack render request failed ${response.status}: ${JSON.stringify(payload).slice(0, 700)}`);
+    throw new Error(formatShotstackRenderError(response.status, payload));
   }
 
   const renderId = stringConfig(asRecord(payload.response).id) ?? stringConfig(payload.id);
@@ -507,6 +518,24 @@ function shouldRetryShotstackEnvironment(payload: Record<string, unknown>) {
     || text.includes("production api");
 }
 
+function formatShotstackRenderError(status: number, payload: Record<string, unknown>) {
+  const nested = stringConfig(asRecord(payload.response).error)
+    ?? stringConfig(payload.message);
+  const text = JSON.stringify(payload);
+  const lowerText = text.toLowerCase();
+  if (lowerText.includes("credits required") || lowerText.includes("credits left") || lowerText.includes("plan limits")) {
+    return [
+      `Shotstack (${status}): חסרים קרדיטים או שהגעת למגבלת התוכנית.`,
+      nested ? `פירוט: ${nested}` : undefined,
+      "פתח Shotstack Dashboard → Subscription והוסף קרדיטים או שדרג תוכנית.",
+      text.slice(0, 500)
+    ].filter(Boolean).join(" ");
+  }
+  return nested
+    ? `Shotstack render failed (${status}): ${nested}`
+    : `Shotstack render request failed ${status}: ${text.slice(0, 700)}`;
+}
+
 function buildShotstackEdit(input: {
   scene: Scene;
   referenceMediaUrl?: string;
@@ -514,44 +543,47 @@ function buildShotstackEdit(input: {
   length: number;
   voice: string;
   language: string;
+  resolution: string;
+  textToSpeech: boolean;
 }) {
-  const tracks = [
-    {
-      clips: [
-        {
-          asset: input.referenceMediaUrl
-            ? {
-              type: "video",
-              src: input.referenceMediaUrl,
-              volume: 0
-            }
-            : {
-              type: "html",
-              html: `<div style="width:100%;height:100%;background:#111827;"></div>`,
-              width: 1080,
-              height: 1920
-            },
-          start: 0,
-          length: input.length,
-          fit: "crop"
-        }
-      ]
-    },
-    {
-      clips: [
-        {
-          asset: {
-            type: "text-to-speech",
-            text: input.scene.narration,
-            voice: input.voice,
-            language: input.language
+  const videoTrack = {
+    clips: [
+      {
+        asset: input.referenceMediaUrl
+          ? {
+            type: "video",
+            src: input.referenceMediaUrl,
+            volume: 0
+          }
+          : {
+            type: "html",
+            html: `<div style="width:100%;height:100%;background:#111827;"></div>`,
+            width: 1080,
+            height: 1920
           },
-          start: 0,
-          length: input.length
-        }
-      ]
-    }
-  ];
+        start: 0,
+        length: input.length,
+        fit: "crop"
+      }
+    ]
+  };
+
+  const ttsTrack = {
+    clips: [
+      {
+        asset: {
+          type: "text-to-speech",
+          text: input.scene.narration,
+          voice: input.voice,
+          language: input.language
+        },
+        start: 0,
+        length: input.length
+      }
+    ]
+  };
+
+  const tracks = input.textToSpeech ? [videoTrack, ttsTrack] : [videoTrack];
 
   return {
     timeline: {
@@ -560,7 +592,7 @@ function buildShotstackEdit(input: {
     },
     output: {
       format: "mp4",
-      resolution: "hd",
+      resolution: input.resolution,
       aspectRatio: shotstackAspectRatioFor(input.aspectRatio)
     }
   };
