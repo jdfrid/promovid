@@ -324,6 +324,55 @@ textarea {
   font-size: 0.82rem;
 }
 
+.prompt-brief-details {
+  margin-top: 16px;
+}
+
+.prompt-brief-toolbar {
+  margin: 8px 0 12px;
+}
+
+.prompt-brief-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #dfe2ff;
+  background: #111421;
+  border: 1px solid #323957;
+  border-radius: 14px;
+  padding: 14px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.prompt-brief-highlight {
+  margin-top: 16px;
+  border: 1px solid rgba(109, 93, 252, 0.45);
+  background: rgba(109, 93, 252, 0.12);
+}
+
+.prompt-brief-highlight .prompt-brief-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.prompt-brief-highlight h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #fff;
+}
+
+.prompt-brief-studio-wrap {
+  margin-bottom: 16px;
+}
+
 .row,
 .upload {
   display: grid;

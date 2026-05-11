@@ -1,3 +1,19 @@
+/** JSON בשדה project.materialLibrary — נוצר אחרי איסוף חומרים */
+export type MaterialLibraryJson = Record<string, unknown> & {
+  previewBrief?: string;
+};
+
+/** JSON בשדה project.renderPackage — נוצר אחרי בניית חבילת רינדור */
+export type RenderPackageJson = Record<string, unknown> & {
+  renderEnginePromptBrief?: string;
+  shotstackHints?: {
+    segmentSeconds: number;
+    resolution: string;
+    textToSpeech: boolean;
+    apiVersion: string;
+  };
+};
+
 export interface Scene {
   id: string;
   title: string;
@@ -38,8 +54,8 @@ export interface Project {
   backgroundVideoPrompt?: string | null;
   musicPrompt?: string | null;
   scriptAnalysis?: Record<string, unknown> | null;
-  materialLibrary?: Record<string, unknown> | null;
-  renderPackage?: Record<string, unknown> | null;
+  materialLibrary?: MaterialLibraryJson | null;
+  renderPackage?: RenderPackageJson | null;
   renderPackageApprovedAt?: string | null;
   status: string;
   scenes: Scene[];

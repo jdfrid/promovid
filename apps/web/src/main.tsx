@@ -184,6 +184,32 @@ function Dashboard({ onOpenProject }: { onOpenProject: (projectId: string) => vo
   );
 }
 
+function readOptionalPackageString(pkg: unknown, key: string): string | undefined {
+  if (!pkg || typeof pkg !== "object") {
+    return undefined;
+  }
+  const value = (pkg as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function CopyMarkdownToolbar({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <div className="prompt-brief-toolbar">
+      <button type="button" className="secondary" onClick={() => void copy()}>{copied ? "הועתק ללוח" : "העתקה ללוח"}</button>
+    </div>
+  );
+}
+
 function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
   const [project, setProject] = useState<Project>();
   const [busy, setBusy] = useState(false);
@@ -494,6 +520,8 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     actionLogs,
     renderLogs
   });
+  const materialBrief = project ? readOptionalPackageString(project.materialLibrary, "previewBrief") : undefined;
+  const renderEngineBrief = project ? readOptionalPackageString(project.renderPackage, "renderEnginePromptBrief") : undefined;
   const steps = ["בקשה", "תסריט", "ניתוח", "חומרים", "חבילת רינדור", "אישור"];
 
   return (
@@ -561,7 +589,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         </div>
         <div className="panel">
           <h3>תסריט, ניתוח וחבילת חומרים</h3>
-          {!project && <p className="muted">לאחר יצירת התסריט יוצגו כאן סצנות של 7-8 שניות.</p>}
+          {!project && <p className="muted">לאחר יצירת התסריט יוצגו כאן סצנות של כ־5 שניות כל אחת.</p>}
           {project && <p className="notice">{nextRequiredPreProductionStep(project)}</p>}
           {project && (
             <div className="stage-actions">
@@ -577,6 +605,22 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
               <button className="primary" disabled={busy || project.status !== "RENDER_PACKAGE_READY"} onClick={() => void approveRenderPackage()}>
                 4. אישור חבילת הרינדור
               </button>
+            </div>
+          )}
+          {project && materialBrief && (
+            <details className="scene-details prompt-brief-details" open>
+              <summary>סיכום תסריט וחומרים</summary>
+              <CopyMarkdownToolbar text={materialBrief} />
+              <pre className="prompt-brief-pre">{materialBrief}</pre>
+            </details>
+          )}
+          {project && renderEngineBrief && (
+            <div className="panel prompt-brief-highlight">
+              <div className="prompt-brief-header">
+                <h4>מה נשלח למנוע הרינדור (סיכום)</h4>
+                <CopyMarkdownToolbar text={renderEngineBrief} />
+              </div>
+              <pre className="prompt-brief-pre">{renderEngineBrief}</pre>
             </div>
           )}
           {project?.scriptAnalysis && (
@@ -974,6 +1018,7 @@ function RenderStudio() {
   const [message, setMessage] = useState("");
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const studioRenderBrief = selectedProject ? readOptionalPackageString(selectedProject.renderPackage, "renderEnginePromptBrief") : undefined;
 
   async function refresh(projectId = selectedProjectId) {
     const loadedProjects = await apiGet<Project[]>("/projects");
@@ -1048,6 +1093,15 @@ function RenderStudio() {
         </div>
         <div className="panel">
           <h3>חבילת הרינדור</h3>
+          {studioRenderBrief && (
+            <div className="prompt-brief-highlight prompt-brief-studio-wrap">
+              <div className="prompt-brief-header">
+                <h4>סיכום למנוע הרינדור</h4>
+                <CopyMarkdownToolbar text={studioRenderBrief} />
+              </div>
+              <pre className="prompt-brief-pre">{studioRenderBrief}</pre>
+            </div>
+          )}
           {!selectedProject?.renderPackage && <p className="muted">אין עדיין חבילת רינדור לפרויקט הזה.</p>}
           {selectedProject?.renderPackage && <code className="json-block">{JSON.stringify(selectedProject.renderPackage, null, 2)}</code>}
         </div>
