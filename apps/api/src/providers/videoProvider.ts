@@ -1,4 +1,5 @@
 import type { Project, ProviderCredential, Scene } from "@prisma/client";
+import { isVideoProviderQuotaOrPlanLimitError } from "@promovid/shared";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
@@ -97,23 +98,37 @@ export async function generateSceneVideo(input: {
     }
   }
 
-  const fallbackReason = input.videoProviders.length === 0
+  const fallbackReasonBase = input.videoProviders.length === 0
     ? "VIDEO provider missing"
     : "No active VIDEO provider returned a generated clip";
-  if (!isFfmpegFallbackAllowed(input.videoProviders)) {
+  const allowConfigured = isFfmpegFallbackAllowed(input.videoProviders);
+  const allowQuotaAuto = Boolean(lastProviderError && isVideoProviderQuotaOrPlanLimitError(lastProviderError));
+
+  if (!allowConfigured && !allowQuotaAuto) {
     await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי ולכן הרינדור נעצר במקום לייצר סרטון טקסט לא קשור", {
       sceneId: input.scene.id,
-      fallbackReason,
+      fallbackReason: fallbackReasonBase,
       lastProviderError
     });
-    const detail = lastProviderError ?? fallbackReason;
+    const detail = lastProviderError ?? fallbackReasonBase;
     throw new Error(`True video generation failed for scene ${input.scene.order + 1}: ${detail}. Configure an active VIDEO provider with a working endpoint/API key, top up Shotstack credits if you see a plan-limit message, or explicitly enable FFmpeg fallback in the VIDEO provider config with allowFfmpegFallback=true.`);
   }
 
-  await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי; מפעיל fallback ברור של FFmpeg לפי הגדרת ספק", {
-    sceneId: input.scene.id,
-    fallbackReason
-  });
+  if (allowQuotaAuto && !allowConfigured) {
+    await input.onLog?.("video_quota_fallback_ffmpeg", "מגבלת ספק חיצוני (קרדיטים/תוכנית); מפעיל קליפ FFmpeg כדי לא לעצור את הרינדור", {
+      sceneId: input.scene.id,
+      hint: lastProviderError ? String(lastProviderError).slice(0, 400) : undefined
+    });
+  } else {
+    await input.onLog?.("video_provider_missing_or_failed", "לא נוצר וידאו אמיתי; מפעיל fallback ברור של FFmpeg לפי הגדרת ספק", {
+      sceneId: input.scene.id,
+      fallbackReason: fallbackReasonBase
+    });
+  }
+
+  const fallbackReason = allowQuotaAuto && !allowConfigured
+    ? `VIDEO provider quota/plan limit — automatic FFmpeg fallback (${fallbackReasonBase})`
+    : fallbackReasonBase;
   const fallbackClip = await renderSceneClip({
     projectId: input.project.id,
     scene: input.scene,

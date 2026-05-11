@@ -1,6 +1,7 @@
 import { Component, StrictMode, useEffect, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { isVideoProviderQuotaOrPlanLimitError } from "@promovid/shared";
 import { apiGet, apiPatch, apiPost, absoluteAssetUrl } from "./api";
 import type { Asset, AuditLog, Project, Provider, RenderJob } from "./types";
 import "./styles.css";
@@ -84,6 +85,14 @@ function persistLastActiveProjectId(projectId: string) {
   } catch {
     // ignore quota / private mode
   }
+}
+
+function auditLogsSuggestQuotaIssue(logs: AuditLog[]): boolean {
+  return logs.some((log) => {
+    const metaMsg = typeof log.metadata?.message === "string" ? log.metadata.message : "";
+    const text = `${log.action} ${metaMsg} ${JSON.stringify(log.metadata ?? {})}`;
+    return isVideoProviderQuotaOrPlanLimitError(text);
+  });
 }
 
 const defaultCreateForm = {
@@ -286,6 +295,51 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     }
 
     void loadProject(selectedProjectId);
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = localStorage.getItem(LAST_ACTIVE_PROJECT_STORAGE_KEY);
+        if (!raw || !looksLikeProjectId(raw)) {
+          return;
+        }
+        const id = raw.trim();
+        setBusy(true);
+        setError("");
+        const [loadedProject, logs] = await Promise.all([
+          apiGet<Project>(`/projects/${id}`),
+          apiGet<AuditLog[]>(`/projects/${id}/logs`)
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setProject(loadedProject);
+        setRenderLogs(logs);
+        setForm({
+          ...defaultCreateForm,
+          title: loadedProject.title,
+          sourceText: loadedProject.sourceText,
+          mode: loadedProject.mode,
+          duration: loadedProject.duration,
+          aspectRatio: loadedProject.aspectRatio
+        });
+        addLog("project_restored_session", "פרויקט שוחזר אוטומטית מהסשן האחרון", { projectId: id });
+      } catch {
+        /* stale id or offline — ignore */
+      } finally {
+        if (!cancelled) {
+          setBusy(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -1118,6 +1172,7 @@ function RenderStudio() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const studioRenderBrief = selectedProject ? readOptionalPackageString(selectedProject.renderPackage, "renderEnginePromptBrief") : undefined;
+  const quotaBannerVisible = useMemo(() => auditLogsSuggestQuotaIssue(renderLogs), [renderLogs]);
 
   async function refresh(projectId = selectedProjectId) {
     const loadedProjects = await apiGet<Project[]>("/projects");
@@ -1164,6 +1219,18 @@ function RenderStudio() {
         <p className="eyebrow">Render Studio</p>
         <h2>רינדור מחבילת חומרים מאושרת</h2>
       </div>
+      {quotaBannerVisible && (
+        <div className="panel notice warning-notice">
+          <strong>מגבלת Shotstack / קרדיטים</strong>
+          <p>
+            בלוג מופיעה שגיאת תוכנית או קרדיטים ב‑Shotstack — זו מגבלה של חשבון הספק, לא באג באפליקציה.
+            ניתן להוסיף קרדיטים או לשדרג תוכנית, ובהגדרות ספק VIDEO להפעיל FFmpeg fallback כשהספק נכשל.
+          </p>
+          <p>
+            <a href="https://dashboard.shotstack.io/subscription" target="_blank" rel="noreferrer">Shotstack — Subscription / קרדיטים</a>
+          </p>
+        </div>
+      )}
       <div className="two-col">
         <div className="panel">
           <label>בחירת פרויקט
@@ -1376,6 +1443,7 @@ type ProviderFormState = {
   timeoutSeconds: number;
   shotstackResolution: string;
   shotstackTextToSpeech: boolean;
+  allowFfmpegFallback: boolean;
 };
 
 function providerConfigForForm(activeType: string, form: ProviderFormState) {
@@ -1391,7 +1459,8 @@ function providerConfigForForm(activeType: string, form: ProviderFormState) {
       endpoint: form.endpoint.trim(),
       timeoutSeconds: Number(form.timeoutSeconds),
       resolution: form.shotstackResolution,
-      textToSpeech: form.shotstackTextToSpeech
+      textToSpeech: form.shotstackTextToSpeech,
+      allowFfmpegFallback: form.allowFfmpegFallback
     };
   }
 
@@ -1416,7 +1485,8 @@ function Settings() {
     endpoint: "",
     timeoutSeconds: 180,
     shotstackResolution: "sd",
-    shotstackTextToSpeech: true
+    shotstackTextToSpeech: true,
+    allowFfmpegFallback: true
   });
   useEffect(() => {
     void apiGet<Provider[]>("/settings/services").then(setProviders);
@@ -1450,7 +1520,8 @@ function Settings() {
         endpoint: "",
         timeoutSeconds: 180,
         shotstackResolution: "sd",
-        shotstackTextToSpeech: true
+        shotstackTextToSpeech: true,
+        allowFfmpegFallback: true
       });
       return;
     }
@@ -1470,7 +1541,8 @@ function Settings() {
         endpoint: typeof provider.config?.endpoint === "string" ? provider.config.endpoint : "",
         timeoutSeconds: Number(provider.config?.timeoutSeconds ?? 180),
         shotstackResolution: typeof provider.config?.resolution === "string" ? provider.config.resolution : "sd",
-        shotstackTextToSpeech: typeof provider.config?.textToSpeech === "boolean" ? provider.config.textToSpeech : true
+        shotstackTextToSpeech: typeof provider.config?.textToSpeech === "boolean" ? provider.config.textToSpeech : true,
+        allowFfmpegFallback: typeof provider.config?.allowFfmpegFallback === "boolean" ? provider.config.allowFfmpegFallback : true
       });
     }
   }
@@ -1530,7 +1602,8 @@ function Settings() {
                 endpoint: "",
                 timeoutSeconds: 180,
                 shotstackResolution: "sd",
-                shotstackTextToSpeech: true
+                shotstackTextToSpeech: true,
+                allowFfmpegFallback: true
               });
             }}
           >
@@ -1604,6 +1677,10 @@ function Settings() {
                 <input type="checkbox" checked={form.shotstackTextToSpeech} onChange={(event) => setForm({ ...form, shotstackTextToSpeech: event.target.checked })} />
                 Shotstack · דיבור מובנה (TTS) בסרטון
               </label>
+              <label className="checkbox-label">
+                <input type="checkbox" checked={form.allowFfmpegFallback} onChange={(event) => setForm({ ...form, allowFfmpegFallback: event.target.checked })} />
+                מותר FFmpeg fallback כשספק הווידאו נכשל (מומלץ; כולל מצב מושפל כשאין קרדיטים ב‑Shotstack)
+              </label>
               <p className="muted">Shotstack: ברירת המחדל היא SD ומקטעים של 5 שניות. ללא TTS אפשר להסתמך על קובץ קול מהאיסוף (מוזג ב־FFmpeg אחרי הרינדור). Runway/Kling/Gemini דורשים endpoint או מפתח מתאים.</p>
             </div>
           )}
@@ -1627,7 +1704,7 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180, shotstackResolution: "sd", shotstackTextToSpeech: true });
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180, shotstackResolution: "sd", shotstackTextToSpeech: true, allowFfmpegFallback: true });
               }}>
                 {displayName}
               </button>

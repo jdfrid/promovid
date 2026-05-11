@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { RenderJobPayload } from "@promovid/shared";
+import { isVideoProviderQuotaOrPlanLimitError } from "@promovid/shared";
 import { prisma } from "./db.js";
 import { redisConnection } from "./queue.js";
 import { addAudioToClip, mergeSceneClips } from "./render/ffmpegRenderer.js";
@@ -193,7 +194,7 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
           scene: index + 1,
           error: message
         });
-        if (isProviderPlanLimitError(message)) {
+        if (isVideoProviderQuotaOrPlanLimitError(message)) {
           await log("render_provider_plan_limit_reached", "Shotstack עצר בגלל מגבלת קרדיטים; מפסיק לשלוח סצנות נוספות ומחבר תוצרים קיימים", {
             sceneId: scene.id,
             scene: index + 1,
@@ -325,19 +326,6 @@ function orderVideoProviders<T extends { provider: string; priority: number }>(p
     }
     return left.priority - right.priority;
   });
-}
-
-function isProviderPlanLimitError(message: string) {
-  const normalized = message.toLowerCase();
-  return normalized.includes("credits exhausted")
-    || normalized.includes("credits required")
-    || normalized.includes("credits left")
-    || normalized.includes("plan limit")
-    || normalized.includes("plan limits")
-    || normalized.includes("exceeds one or more plan limits")
-    || normalized.includes("upgrade to increase your plan limits")
-    || message.includes("חסרים קרדיטים")
-    || message.includes("מגבלת התוכנית");
 }
 
 async function withStageTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {

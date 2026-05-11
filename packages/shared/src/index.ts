@@ -25,3 +25,19 @@ export interface RenderJobPayload {
 export interface ApiEnvelope<T> {
   data: T;
 }
+
+/** Shotstack/plan-limit style errors — shared by worker, video provider, and web hints */
+export function isVideoProviderQuotaOrPlanLimitError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("credits exhausted")
+    || normalized.includes("credits required")
+    || normalized.includes("credits left")
+    || normalized.includes("plan limit")
+    || normalized.includes("plan limits")
+    || normalized.includes("exceeds one or more plan limits")
+    || normalized.includes("upgrade to increase your plan limits")
+    || message.includes("חסרים קרדיטים")
+    || message.includes("מגבלת התוכנית")
+  );
+}
