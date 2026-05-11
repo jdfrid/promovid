@@ -40,6 +40,43 @@ interface OperationLog {
   metadata?: Record<string, unknown>;
 }
 
+const LAST_ACTIVE_PROJECT_STORAGE_KEY = "promovid:last-active-project-id";
+
+function looksLikeProjectId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+}
+
+function extractProjectIdFromOperationLogs(logs: OperationLog[]): string | undefined {
+  for (const log of logs) {
+    const id = log.metadata?.projectId;
+    if (typeof id === "string" && looksLikeProjectId(id)) {
+      return id.trim();
+    }
+  }
+  return undefined;
+}
+
+function extractProjectIdFromAuditLogs(logs: AuditLog[]): string | undefined {
+  for (const log of logs) {
+    const metaId = log.metadata?.projectId;
+    if (typeof metaId === "string" && looksLikeProjectId(metaId)) {
+      return metaId.trim();
+    }
+    if (log.entity?.toLowerCase() === "project" && log.entityId && looksLikeProjectId(log.entityId)) {
+      return log.entityId.trim();
+    }
+  }
+  return undefined;
+}
+
+function persistLastActiveProjectId(projectId: string) {
+  try {
+    localStorage.setItem(LAST_ACTIVE_PROJECT_STORAGE_KEY, projectId);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
 const defaultCreateForm = {
   title: "",
   sourceText: "",
@@ -285,6 +322,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         supplementalFiles: uploadedFiles
       });
       setProject(createdProject);
+      persistLastActiveProjectId(createdProject.id);
       addLog("create_script_response_received", "התקבלה תשובה מהשרת", {
         projectId: createdProject.id,
         sceneCount: createdProject.scenes.length
@@ -447,6 +485,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
         apiGet<AuditLog[]>(`/projects/${projectId}/logs`)
       ]);
       setProject(loadedProject);
+      persistLastActiveProjectId(loadedProject.id);
       setRenderLogs(logs);
       setForm({
         ...defaultCreateForm,
@@ -466,18 +505,65 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
 
   async function downloadDiagnosticReport() {
     setDiagnosticMessage("");
-    const latestLogs = project
-      ? await apiGet<AuditLog[]>(`/projects/${project.id}/logs`).catch(() => renderLogs)
-      : renderLogs;
-    const latestProject = project
-      ? await apiGet<Project>(`/projects/${project.id}`).catch(() => project)
-      : undefined;
+    let resolutionSource: "active_screen" | "operation_logs" | "audit_logs" | "local_storage" | undefined;
+    let resolvedId = project?.id;
+    if (resolvedId) {
+      resolutionSource = "active_screen";
+    } else {
+      resolvedId =
+        extractProjectIdFromOperationLogs(actionLogs) ??
+        extractProjectIdFromAuditLogs(renderLogs) ??
+        undefined;
+      if (resolvedId) {
+        resolutionSource = extractProjectIdFromOperationLogs(actionLogs) ? "operation_logs" : "audit_logs";
+      }
+      if (!resolvedId) {
+        try {
+          const stored = localStorage.getItem(LAST_ACTIVE_PROJECT_STORAGE_KEY);
+          if (stored && looksLikeProjectId(stored)) {
+            resolvedId = stored.trim();
+            resolutionSource = "local_storage";
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    let latestProject = project;
+    let latestLogs = renderLogs;
+    let fetchSucceeded = false;
+
+    if (resolvedId) {
+      try {
+        const [nextProject, nextLogs] = await Promise.all([
+          apiGet<Project>(`/projects/${resolvedId}`),
+          apiGet<AuditLog[]>(`/projects/${resolvedId}/logs`).catch(() => [])
+        ]);
+        latestProject = nextProject;
+        latestLogs = nextLogs.length ? nextLogs : renderLogs;
+        fetchSucceeded = true;
+      } catch {
+        fetchSucceeded = false;
+        if (!project) {
+          latestProject = undefined;
+          latestLogs = renderLogs;
+        }
+      }
+    }
+
     const latestJob = latestProject?.renderJobs
       ?.slice()
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
     const report = {
       generatedAt: new Date().toISOString(),
       currentUrl: window.location.href,
+      reportResolution: {
+        resolvedProjectId: resolvedId,
+        source: resolutionSource,
+        fetchSucceeded,
+        hadProjectOnScreen: Boolean(project)
+      },
       currentStatus: buildCurrentStatus({
         busy,
         project: latestProject,
@@ -497,7 +583,7 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `adbot-diagnostic-${latestProject?.id ?? "no-project"}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.download = `adbot-diagnostic-${latestProject?.id ?? resolvedId ?? "no-project"}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -866,7 +952,11 @@ function buildCurrentStatus(input: {
 
 function buildDiagnosisHint(project?: Project, latestRenderJob?: RenderJob, renderLogs: AuditLog[] = []) {
   if (!project) {
-    return "No project exists in the current create screen.";
+    const hinted = extractProjectIdFromAuditLogs(renderLogs);
+    if (hinted) {
+      return `No project loaded on Pre-Production, but server logs reference project ${hinted}. Open it from the Dashboard, or download the diagnostic report again — export tries to attach that project from logs or from the last active session.`;
+    }
+    return "No project loaded on this screen. Create a script or open a project from the Dashboard, then export again.";
   }
 
   if (project.status === "SCRIPT_READY" && !latestRenderJob) {

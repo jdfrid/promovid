@@ -154,6 +154,17 @@ const mediaStopWords = new Set([
   "background"
 ]);
 
+const audioStopWords = new Set([
+  ...mediaStopWords,
+  "music",
+  "audio",
+  "sound",
+  "voice",
+  "narration",
+  "background",
+  "clip"
+]);
+
 function safeDecryptProviderKey(encryptedKey: string, provider: string, log: SceneAssets["log"]) {
   try {
     return decryptSecret(encryptedKey);
@@ -192,20 +203,24 @@ async function findMusic(scene: Scene, providers: ProviderCredential[], log: Sce
   for (const provider of providers) {
     log.push({ step: "music_provider_attempt", message: "מנסה לאתר מוסיקת רקע לסצנה", metadata: { provider: provider.provider, sceneId: scene.id, musicPrompt } });
     if (provider.provider.toLowerCase().includes("openverse")) {
-      const audio = await searchOpenverseAudio({
-        provider,
-        query: buildAudioQuery(scene, musicPrompt),
-        targetDuration: scene.durationSeconds,
-        log,
-        logPrefix: "music"
-      });
-      if (audio) {
-        log.push({
-          step: "music_provider_success",
-          message: "נמצא קובץ מוסיקה/אודיו ב-Openverse לסצנה",
-          metadata: audio.metadata
+      const queries = buildAudioQueryVariants(scene, musicPrompt);
+      for (let qi = 0; qi < queries.length; qi++) {
+        const query = queries[qi];
+        const audio = await searchOpenverseAudio({
+          provider,
+          query,
+          targetDuration: scene.durationSeconds,
+          log,
+          logPrefix: "music"
         });
-        return audio.url;
+        if (audio) {
+          log.push({
+            step: "music_provider_success",
+            message: "נמצא קובץ מוסיקה/אודיו ב-Openverse לסצנה",
+            metadata: { ...audio.metadata, queriesTried: qi + 1 }
+          });
+          return audio.url;
+        }
       }
       continue;
     }
@@ -216,7 +231,10 @@ async function findMusic(scene: Scene, providers: ProviderCredential[], log: Sce
 }
 
 function buildAudioQuery(scene: Scene, prompt?: string | null) {
-  const source = prompt || scene.visualPrompt || `${scene.title} ${scene.narration}`;
+  const quoted =
+    prompt?.match(/"([^"]{3,120})"/)?.[1]?.trim() ??
+    prompt?.match(/'([^']{3,120})'/)?.[1]?.trim();
+  const source = quoted || prompt || scene.visualPrompt || `${scene.title} ${scene.narration}`;
   const cleaned = source
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
@@ -227,19 +245,104 @@ function buildAudioQuery(scene: Scene, prompt?: string | null) {
 
   const englishWords = cleaned.filter((word) => /^[a-z0-9-]+$/.test(word));
   const selected = (englishWords.length >= 2 ? englishWords : cleaned).slice(0, 10);
-  return selected.join(" ") || "upbeat background music";
+  return selected.join(" ") || "instrumental background music";
 }
 
-const audioStopWords = new Set([
-  ...mediaStopWords,
-  "music",
-  "audio",
-  "sound",
-  "voice",
-  "narration",
-  "background",
-  "clip"
-]);
+const OPENVERSE_MUSIC_FALLBACK_QUERIES = [
+  "instrumental cinematic ambient",
+  "soft piano instrumental background",
+  "corporate upbeat instrumental",
+  "calm acoustic instrumental",
+  "luxury lounge ambient instrumental"
+];
+
+function buildAudioQueryVariants(scene: Scene, prompt?: string | null): string[] {
+  const primary = buildAudioQuery(scene, prompt);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const q = raw.trim().replace(/\s+/g, " ");
+    if (q.length < 2 || seen.has(q)) {
+      return;
+    }
+    seen.add(q);
+    out.push(q);
+  };
+  push(primary);
+  for (const fb of OPENVERSE_MUSIC_FALLBACK_QUERIES) {
+    push(fb);
+  }
+  return out;
+}
+
+const openverseAccessTokenCache = new Map<string, { token: string; expiresAtMs: number }>();
+
+async function fetchOpenverseAccessToken(
+  baseUrl: string,
+  credentials: { clientId: string; clientSecret: string },
+  timeoutMs: number,
+  log: SceneAssets["log"]
+): Promise<string | undefined> {
+  const normalizedBase = baseUrl.replace(/\/$/, "");
+  const cacheKey = `${normalizedBase}:${credentials.clientId}`;
+  const now = Date.now();
+  const cached = openverseAccessTokenCache.get(cacheKey);
+  if (cached && cached.expiresAtMs > now + 15_000) {
+    return cached.token;
+  }
+
+  const tokenUrl = new URL("/v1/auth_tokens/token/", normalizedBase);
+  try {
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: credentials.clientId,
+      client_secret: credentials.clientSecret
+    });
+    const response = await fetchWithTimeout(
+      tokenUrl,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "user-agent": "AdBot/0.1 (+https://promovid.onrender.com)"
+        },
+        body
+      },
+      timeoutMs
+    );
+
+    if (!response.ok) {
+      log.push({
+        step: "openverse_token_error",
+        message: "קבלת טוקן Openverse נכשלה — ממשיכים בחיפוש ללא אימות",
+        metadata: { status: response.status }
+      });
+      return undefined;
+    }
+
+    const payload = (await response.json()) as { access_token?: string; expires_in?: number };
+    const token = typeof payload.access_token === "string" ? payload.access_token : undefined;
+    if (!token) {
+      log.push({
+        step: "openverse_token_error",
+        message: "תשובת Openverse ללא access_token — ממשיכים בלי Bearer",
+        metadata: {}
+      });
+      return undefined;
+    }
+
+    const ttlSec = typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) ? payload.expires_in : 3600;
+    openverseAccessTokenCache.set(cacheKey, { token, expiresAtMs: now + Math.max(60_000, ttlSec * 1000) });
+    return token;
+  } catch (error) {
+    log.push({
+      step: "openverse_token_error",
+      message: "קריאת טוקן Openverse נכשלה — ממשיכים בלי Bearer",
+      metadata: { error: error instanceof Error ? error.message : "unknown" }
+    });
+    return undefined;
+  }
+}
 
 async function searchOpenverseAudio(input: {
   provider: ProviderCredential;
@@ -253,6 +356,7 @@ async function searchOpenverseAudio(input: {
   const pageSize = numberConfig(config.pageSize) ?? 10;
   const timeoutMs = numberConfig(config.timeoutMs) ?? 8000;
   const credentials = openverseCredentials(input.provider, input.log);
+  const bearerToken = credentials ? await fetchOpenverseAccessToken(baseUrl, credentials, timeoutMs, input.log) : undefined;
 
   input.log.push({
     step: `${input.logPrefix}_openverse_search_started`,
@@ -260,7 +364,8 @@ async function searchOpenverseAudio(input: {
     metadata: {
       provider: input.provider.provider,
       query: input.query,
-      authenticated: Boolean(credentials),
+      credentialsConfigured: Boolean(credentials),
+      bearerAttached: Boolean(bearerToken),
       pageSize
     }
   });
@@ -273,7 +378,8 @@ async function searchOpenverseAudio(input: {
 
     const response = await fetchWithTimeout(url, {
       headers: {
-        "user-agent": "AdBot/0.1 (+https://promovid.onrender.com)"
+        "user-agent": "AdBot/0.1 (+https://promovid.onrender.com)",
+        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {})
       }
     }, timeoutMs);
 

@@ -62,12 +62,12 @@ export function buildMaterialLibrary(project: ProjectWithScenes, scriptAnalysis:
       voice: {
         url: scene.voiceUrl,
         prompt: scene.narration,
-        providerStatus: scene.voiceUrl ? "ready" : "missing"
+        providerStatus: scene.voiceUrl ? "ready" : "optional"
       },
       music: {
         url: scene.musicUrl,
         prompt: project.musicPrompt,
-        providerStatus: scene.musicUrl ? "ready" : "missing"
+        providerStatus: scene.musicUrl ? "ready" : "optional"
       }
     }))
   };
@@ -84,9 +84,7 @@ export async function buildAndStoreRenderPackage(input: {
     sceneId: scene.id,
     sceneOrder: scene.order,
     missing: [
-      scene.mediaUrl || scene.referenceMediaUrl ? undefined : "background/reference media",
-      scene.voiceUrl ? undefined : "voice/dialogue audio",
-      scene.musicUrl ? undefined : "music"
+      scene.mediaUrl || scene.referenceMediaUrl ? undefined : "background/reference media"
     ].filter(Boolean) as string[]
   })).filter((entry) => entry.missing.length > 0);
 
