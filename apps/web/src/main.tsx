@@ -43,7 +43,16 @@ interface OperationLog {
 const LAST_ACTIVE_PROJECT_STORAGE_KEY = "promovid:last-active-project-id";
 
 function looksLikeProjectId(id: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+  const t = id.trim();
+  if (!t) {
+    return false;
+  }
+  // UUID v1–v5 (legacy datasets / migrations)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(t)) {
+    return true;
+  }
+  // Prisma default ids: cuid / cuid2–style opaque strings (no hyphens), e.g. cmp125hew0004su10t2fka14k
+  return /^[a-z][a-z0-9]{8,34}$/i.test(t) && t.length >= 20 && t.length <= 36;
 }
 
 function extractProjectIdFromOperationLogs(logs: OperationLog[]): string | undefined {
@@ -559,8 +568,8 @@ function CreateVideo({ selectedProjectId }: { selectedProjectId?: string }) {
       generatedAt: new Date().toISOString(),
       currentUrl: window.location.href,
       reportResolution: {
-        resolvedProjectId: resolvedId,
-        source: resolutionSource,
+        resolvedProjectId: resolvedId ?? null,
+        source: resolutionSource ?? null,
         fetchSucceeded,
         hadProjectOnScreen: Boolean(project)
       },
