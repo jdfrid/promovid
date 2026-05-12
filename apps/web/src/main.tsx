@@ -1430,7 +1430,7 @@ const providerServiceTypes = [
   { type: "VOICE", label: "קול", description: "TTS, קריינות וקבצי קול לסרטונים.", presets: [["openverse", "Openverse Audio Search"], ["elevenlabs", "ElevenLabs Voiceover"], ["murf", "Murf Voice"], ["playht", "Play.ht Voice"]] },
   { type: "MUSIC", label: "מוסיקה", description: "מוסיקת רקע, קבצי קול וספריות סאונד.", presets: [["openverse", "Openverse Audio Search"], ["epidemic", "Epidemic Sound"], ["artlist", "Artlist"]] },
   { type: "AVATAR", label: "אווטרים", description: "יצירת דמויות/דוברים וירטואליים.", presets: [["heygen", "HeyGen"], ["did", "D-ID"], ["synthesia", "Synthesia"]] },
-  { type: "VIDEO", label: "יצירת וידאו", description: "רינדור או יצירת קליפים לכל סצנה. Shotstack מרנדר כל בקשה כמקטע של 5 שניות.", presets: [["shotstack", "Shotstack 5 Second Renderer"], ["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
+  { type: "VIDEO", label: "יצירת וידאו", description: "רינדור או יצירת קליפים לכל סצנה. Shotstack: מקטעים ~5 שניות. xAI Grok Imagine: עד 15 שניות לקליפ.", presets: [["shotstack", "Shotstack 5 Second Renderer"], ["xai", "xAI Grok Imagine Video"], ["runway", "Runway"], ["kling", "Kling AI"], ["gemini", "Gemini Video"]] },
   { type: "MERGE", label: "מיזוג", description: "חיבור סצנות, כתוביות, watermark ו־transitions.", presets: [["ffmpeg", "Self-hosted FFmpeg"], ["shotstack", "Shotstack"], ["creatomate", "Creatomate"]] },
   { type: "STORAGE", label: "אחסון", description: "שמירת קבצים ותוצרים סופיים.", presets: [["local", "Local Storage"], ["cloudflare-r2", "Cloudflare R2"], ["s3", "AWS S3"], ["cloudinary", "Cloudinary"]] },
   { type: "DISTRIBUTION", label: "הפצה", description: "פרסום לרשתות, webhooks וערוצי יציאה.", presets: [["youtube", "YouTube"], ["instagram", "Instagram"], ["tiktok", "TikTok"], ["linkedin", "LinkedIn"]] }
@@ -1444,6 +1444,9 @@ type ProviderFormState = {
   shotstackResolution: string;
   shotstackTextToSpeech: boolean;
   allowFfmpegFallback: boolean;
+  xaiApiBaseUrl: string;
+  xaiVideoModel: string;
+  xaiResolution: string;
 };
 
 function providerConfigForForm(activeType: string, form: ProviderFormState) {
@@ -1460,7 +1463,10 @@ function providerConfigForForm(activeType: string, form: ProviderFormState) {
       timeoutSeconds: Number(form.timeoutSeconds),
       resolution: form.shotstackResolution,
       textToSpeech: form.shotstackTextToSpeech,
-      allowFfmpegFallback: form.allowFfmpegFallback
+      allowFfmpegFallback: form.allowFfmpegFallback,
+      ...(form.xaiApiBaseUrl.trim() ? { xaiApiBaseUrl: form.xaiApiBaseUrl.trim() } : {}),
+      xaiVideoModel: form.xaiVideoModel.trim() || "grok-imagine-video",
+      xaiResolution: form.xaiResolution || "720p"
     };
   }
 
@@ -1486,7 +1492,10 @@ function Settings() {
     timeoutSeconds: 180,
     shotstackResolution: "sd",
     shotstackTextToSpeech: true,
-    allowFfmpegFallback: true
+    allowFfmpegFallback: true,
+    xaiApiBaseUrl: "",
+    xaiVideoModel: "grok-imagine-video",
+    xaiResolution: "720p"
   });
   useEffect(() => {
     void apiGet<Provider[]>("/settings/services").then(setProviders);
@@ -1521,7 +1530,10 @@ function Settings() {
         timeoutSeconds: 180,
         shotstackResolution: "sd",
         shotstackTextToSpeech: true,
-        allowFfmpegFallback: true
+        allowFfmpegFallback: true,
+        xaiApiBaseUrl: "",
+        xaiVideoModel: "grok-imagine-video",
+        xaiResolution: "720p"
       });
       return;
     }
@@ -1542,7 +1554,10 @@ function Settings() {
         timeoutSeconds: Number(provider.config?.timeoutSeconds ?? 180),
         shotstackResolution: typeof provider.config?.resolution === "string" ? provider.config.resolution : "sd",
         shotstackTextToSpeech: typeof provider.config?.textToSpeech === "boolean" ? provider.config.textToSpeech : true,
-        allowFfmpegFallback: typeof provider.config?.allowFfmpegFallback === "boolean" ? provider.config.allowFfmpegFallback : true
+        allowFfmpegFallback: typeof provider.config?.allowFfmpegFallback === "boolean" ? provider.config.allowFfmpegFallback : true,
+        xaiApiBaseUrl: typeof provider.config?.xaiApiBaseUrl === "string" ? provider.config.xaiApiBaseUrl : "",
+        xaiVideoModel: typeof provider.config?.xaiVideoModel === "string" ? provider.config.xaiVideoModel : "grok-imagine-video",
+        xaiResolution: typeof provider.config?.xaiResolution === "string" ? provider.config.xaiResolution : "720p"
       });
     }
   }
@@ -1603,7 +1618,10 @@ function Settings() {
                 timeoutSeconds: 180,
                 shotstackResolution: "sd",
                 shotstackTextToSpeech: true,
-                allowFfmpegFallback: true
+                allowFfmpegFallback: true,
+                xaiApiBaseUrl: "",
+                xaiVideoModel: "grok-imagine-video",
+                xaiResolution: "720p"
               });
             }}
           >
@@ -1663,8 +1681,8 @@ function Settings() {
               <label>Endpoint / Webhook URL אופציונלי
                 <input value={form.endpoint} placeholder="ריק ל-Runway ישיר, או webhook שמחזיר videoUrl" onChange={(event) => setForm({ ...form, endpoint: event.target.value })} />
               </label>
-              <label>Timeout בשניות
-                <input type="number" min="30" max="900" step="10" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: Number(event.target.value) })} />
+              <label>Timeout בשניות (מקס׳ המתנה ליצירת קליפ — ל‑xAI מומלץ 600 ומעלה)
+                <input type="number" min="30" max="3600" step="10" value={form.timeoutSeconds} onChange={(event) => setForm({ ...form, timeoutSeconds: Number(event.target.value) })} />
               </label>
               <label>Shotstack · רזולוציה (חיסכון בקרדיטים)
                 <select value={form.shotstackResolution} onChange={(event) => setForm({ ...form, shotstackResolution: event.target.value })}>
@@ -1681,7 +1699,31 @@ function Settings() {
                 <input type="checkbox" checked={form.allowFfmpegFallback} onChange={(event) => setForm({ ...form, allowFfmpegFallback: event.target.checked })} />
                 מותר FFmpeg fallback כשספק הווידאו נכשל (מומלץ; כולל מצב מושפל כשאין קרדיטים ב‑Shotstack)
               </label>
-              <p className="muted">Shotstack: ברירת המחדל היא SD ומקטעים של 5 שניות. ללא TTS אפשר להסתמך על קובץ קול מהאיסוף (מוזג ב־FFmpeg אחרי הרינדור). Runway/Kling/Gemini דורשים endpoint או מפתח מתאים.</p>
+              {(form.provider.toLowerCase().includes("xai") || form.provider.toLowerCase().includes("grok")) && (
+                <>
+                  <label>xAI · כתובת בסיס API (ריק = https://api.x.ai)
+                    <input value={form.xaiApiBaseUrl} placeholder="https://api.x.ai" onChange={(event) => setForm({ ...form, xaiApiBaseUrl: event.target.value })} />
+                  </label>
+                  <label>xAI · מודל וידאו
+                    <input value={form.xaiVideoModel} placeholder="grok-imagine-video" onChange={(event) => setForm({ ...form, xaiVideoModel: event.target.value })} />
+                  </label>
+                  <label>xAI · רזולוציית פלט
+                    <select value={form.xaiResolution} onChange={(event) => setForm({ ...form, xaiResolution: event.target.value })}>
+                      <option value="480p">480p</option>
+                      <option value="720p">720p</option>
+                      <option value="1080p">1080p</option>
+                    </select>
+                  </label>
+                  <p className="muted">
+                    יצירת וידאו אסינכרונית דרך Grok Imagine — עד 15 שניות לקליפ לפי משך הסצנה במערכת.
+                    תיעוד:{" "}
+                    <a href="https://docs.x.ai/developers/model-capabilities/video/generation" target="_blank" rel="noreferrer">Video Generation</a>
+                    {" · "}
+                    <a href="https://docs.x.ai/developers/quickstart" target="_blank" rel="noreferrer">Quickstart</a>
+                  </p>
+                </>
+              )}
+              <p className="muted">Shotstack: מקטעים של ~5 שניות. xAI: עד 15 שניות לקליפ. Runway/Kling/Gemini: לעיתים נדרש endpoint או מפתח נפרד.</p>
             </div>
           )}
           <div className="row compact-row">
@@ -1704,7 +1746,8 @@ function Settings() {
             {activeService.presets.map(([provider, displayName]) => (
               <button key={`${activeType}-${provider}`} onClick={() => {
                 setSelectedId("new");
-                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: 180, shotstackResolution: "sd", shotstackTextToSpeech: true, allowFfmpegFallback: true });
+                const ts = provider === "xai" ? 600 : 180;
+                setForm({ type: activeType, provider, displayName, apiKey: "", priority: 1, enabled: true, model: provider === "gemini" ? "gemini-2.5-flash-lite" : "", temperature: 0.7, endpoint: "", timeoutSeconds: ts, shotstackResolution: "sd", shotstackTextToSpeech: true, allowFfmpegFallback: true, xaiApiBaseUrl: "", xaiVideoModel: "grok-imagine-video", xaiResolution: "720p" });
               }}>
                 {displayName}
               </button>

@@ -44,8 +44,9 @@ export async function generateSceneVideo(input: {
     });
 
     try {
-      const generated = providerName.includes("shotstack")
-        ? await generateWithShotstack({
+      let generated: { outputPath: string; generatedVideoUrl?: string } | undefined;
+      if (providerName.includes("shotstack")) {
+        generated = await generateWithShotstack({
           provider,
           prompt: videoPrompt,
           scene: input.scene,
@@ -53,25 +54,37 @@ export async function generateSceneVideo(input: {
           referenceMediaUrl: input.referenceMediaUrl,
           aspectRatio: input.aspectRatio,
           onLog: input.onLog
-        })
-        : providerName.includes("runway")
-        ? await generateWithRunway({
+        });
+      } else if (providerName.includes("runway")) {
+        generated = await generateWithRunway({
           provider,
           prompt: videoPrompt,
           scene: input.scene,
           project: input.project,
           aspectRatio: input.aspectRatio,
           onLog: input.onLog
-        })
-        : await generateWithConfiguredEndpoint({
-        provider,
-        prompt: videoPrompt,
-        scene: input.scene,
-        project: input.project,
-        referenceMediaUrl: input.referenceMediaUrl,
-        aspectRatio: input.aspectRatio,
-        onLog: input.onLog
-      });
+        });
+      } else if (providerName.includes("xai") || providerName.includes("grok")) {
+        generated = await generateWithXaiVideo({
+          provider,
+          prompt: videoPrompt,
+          scene: input.scene,
+          project: input.project,
+          referenceMediaUrl: input.referenceMediaUrl,
+          aspectRatio: input.aspectRatio,
+          onLog: input.onLog
+        });
+      } else {
+        generated = await generateWithConfiguredEndpoint({
+          provider,
+          prompt: videoPrompt,
+          scene: input.scene,
+          project: input.project,
+          referenceMediaUrl: input.referenceMediaUrl,
+          aspectRatio: input.aspectRatio,
+          onLog: input.onLog
+        });
+      }
 
       if (generated) {
         return {
@@ -266,6 +279,154 @@ async function generateWithShotstack(input: {
   });
 
   return { outputPath, generatedVideoUrl };
+}
+
+async function generateWithXaiVideo(input: {
+  provider: ProviderCredential;
+  prompt: string;
+  scene: Scene;
+  project: Project;
+  aspectRatio: string;
+  referenceMediaUrl?: string;
+  onLog?: VideoProviderLog;
+}) {
+  const apiKey = input.provider.encryptedKey ? decryptSecret(input.provider.encryptedKey) : undefined;
+  if (!apiKey) {
+    throw new Error("xAI Grok video provider is missing an API key.");
+  }
+
+  const config = asRecord(input.provider.config);
+  const baseRaw = stringConfig(config.xaiApiBaseUrl) ?? "https://api.x.ai";
+  const baseUrl = baseRaw.replace(/\/$/, "");
+  const model = stringConfig(config.xaiVideoModel) ?? stringConfig(config.model) ?? "grok-imagine-video";
+  const resolution = stringConfig(config.xaiResolution) ?? "720p";
+  const pollIntervalMs = numberConfig(config.xaiPollIntervalMs) ?? 5000;
+  const timeoutSeconds = numberConfig(config.timeoutSeconds) ?? 600;
+
+  const duration = Math.min(15, Math.max(1, Math.round(input.scene.durationSeconds)));
+  const aspectRatio = xaiAspectRatioFor(input.aspectRatio);
+
+  await input.onLog?.("xai_video_request_sent", "נשלחה בקשת יצירת וידאו ל-xAI (Grok Imagine)", {
+    provider: input.provider.provider,
+    sceneId: input.scene.id,
+    model,
+    duration,
+    aspect_ratio: aspectRatio,
+    resolution,
+    hasReferenceImage: Boolean(input.referenceMediaUrl)
+  });
+
+  const body: Record<string, unknown> = {
+    model,
+    prompt: input.prompt,
+    duration,
+    aspect_ratio: aspectRatio,
+    resolution
+  };
+  if (input.referenceMediaUrl) {
+    body.image = input.referenceMediaUrl;
+  }
+
+  const createResponse = await fetchWithTimeout(`${baseUrl}/v1/videos/generations`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(body)
+  }, 90_000);
+
+  const createPayload = await readJson(createResponse);
+  if (!createResponse.ok) {
+    throw new Error(`xAI video start failed ${createResponse.status}: ${JSON.stringify(createPayload).slice(0, 900)}`);
+  }
+
+  const requestId = stringConfig(createPayload.request_id);
+  if (!requestId) {
+    throw new Error(`xAI response missing request_id: ${JSON.stringify(createPayload).slice(0, 600)}`);
+  }
+
+  await input.onLog?.("xai_video_task_created", "xAI החזיר request_id ליצירת וידאו", {
+    requestId,
+    model
+  });
+
+  const donePayload = await pollXaiVideoJob({
+    baseUrl,
+    apiKey,
+    requestId,
+    timeoutSeconds,
+    pollIntervalMs,
+    onLog: input.onLog
+  });
+
+  const videoObj = asRecord(donePayload.video);
+  const generatedVideoUrl = stringConfig(videoObj.url);
+  if (!generatedVideoUrl) {
+    throw new Error(`xAI video completed without URL: ${JSON.stringify(donePayload).slice(0, 800)}`);
+  }
+
+  const outputPath = await downloadGeneratedVideo({
+    projectId: input.project.id,
+    sceneOrder: input.scene.order,
+    url: generatedVideoUrl,
+    onLog: input.onLog
+  });
+
+  return { outputPath, generatedVideoUrl };
+}
+
+async function pollXaiVideoJob(input: {
+  baseUrl: string;
+  apiKey: string;
+  requestId: string;
+  timeoutSeconds: number;
+  pollIntervalMs: number;
+  onLog?: VideoProviderLog;
+}) {
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  while (Date.now() - startedAt < input.timeoutSeconds * 1000) {
+    attempts += 1;
+    const response = await fetchWithTimeout(`${input.baseUrl}/v1/videos/${encodeURIComponent(input.requestId)}`, {
+      headers: {
+        authorization: `Bearer ${input.apiKey}`
+      }
+    }, 45_000);
+    const data = await readJson(response);
+    if (!response.ok) {
+      throw new Error(`xAI video poll failed ${response.status}: ${JSON.stringify(data).slice(0, 800)}`);
+    }
+
+    const status = stringConfig(data.status) ?? "unknown";
+    await input.onLog?.("xai_video_poll", "סטטוס יצירת וידאו xAI", {
+      requestId: input.requestId,
+      status,
+      attempts
+    });
+
+    if (status === "done") {
+      return data;
+    }
+    if (status === "failed") {
+      throw new Error(`xAI video generation failed: ${JSON.stringify(data).slice(0, 900)}`);
+    }
+    if (status === "expired") {
+      throw new Error("xAI video request expired");
+    }
+
+    await wait(input.pollIntervalMs);
+  }
+
+  throw new Error(`xAI video timed out after ${input.timeoutSeconds} seconds`);
+}
+
+function xaiAspectRatioFor(aspectRatio: string): string {
+  if (aspectRatio === "16:9" || aspectRatio === "9:16" || aspectRatio === "1:1") {
+    return aspectRatio;
+  }
+  return "9:16";
 }
 
 async function generateWithRunway(input: {
@@ -683,6 +844,9 @@ function videoProviderHint(providerName: string) {
   }
   if (providerName.includes("gemini") || providerName.includes("veo")) {
     return "Gemini/Veo adapter is available through a configured endpoint/webhookUrl until direct Veo API is enabled.";
+  }
+  if (providerName.includes("xai") || providerName.includes("grok")) {
+    return "Use xAI API key and video model (default grok-imagine-video). Text-to-video via POST /v1/videos/generations — see https://docs.x.ai/developers/model-capabilities/video/generation";
   }
   if (providerName.includes("runway") || providerName.includes("kling")) {
     return "Set config.endpoint or config.webhookUrl to a service that returns { videoUrl }.";
