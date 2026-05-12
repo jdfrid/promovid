@@ -65,22 +65,20 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
       },
       orderBy: [{ type: "asc" }, { priority: "asc" }]
     });
-    const shotstackProviders = orderVideoProviders(providers.filter((provider) => provider.provider.toLowerCase().includes("shotstack")));
-    const ignoredVideoProviders = providers.filter((provider) => provider.type === "VIDEO" && !provider.provider.toLowerCase().includes("shotstack"));
+    const videoProvidersAll = orderVideoProviders(providers.filter((provider) => provider.type === "VIDEO"));
     const providersByType = {
-      VIDEO: shotstackProviders
+      VIDEO: videoProvidersAll
     };
 
     await log("providers_loaded", "נטענו ספקי וידאו פעילים לשלב הרינדור", {
       video: providersByType.VIDEO.length,
-      selectedRenderer: "shotstack",
+      providerOrder: providersByType.VIDEO.map((provider) => provider.provider),
       providers: providersByType.VIDEO.map((provider) => ({
         type: provider.type,
         provider: provider.provider,
         priority: provider.priority,
         hasKey: Boolean(provider.encryptedKey)
-      })),
-      ignoredVideoProviders: ignoredVideoProviders.map((provider) => provider.provider)
+      }))
     });
 
     const orderedScenes = [...project.scenes].sort((a, b) => a.order - b.order);
@@ -115,8 +113,8 @@ export async function processRenderJob(data: RenderJobPayload, updateProgress?: 
             aspectRatio: project.aspectRatio,
             onLog: log
           }),
-          150_000,
-          `Scene ${index + 1} video generation timed out after 150 seconds`
+          900_000,
+          `Scene ${index + 1} video generation timed out after 900 seconds`
         );
         const clipWithAudioPath = await addAudioToClip({
           projectId: project.id,
@@ -317,12 +315,22 @@ async function shutdown(signal: string) {
   }
 }
 
+function videoProviderTier(provider: string): number {
+  const name = provider.toLowerCase();
+  if (name.includes("shotstack")) {
+    return 0;
+  }
+  if (name.includes("xai") || name.includes("grok")) {
+    return 1;
+  }
+  return 2;
+}
+
 function orderVideoProviders<T extends { provider: string; priority: number }>(providers: T[]) {
   return [...providers].sort((left, right) => {
-    const leftIsShotstack = left.provider.toLowerCase().includes("shotstack");
-    const rightIsShotstack = right.provider.toLowerCase().includes("shotstack");
-    if (leftIsShotstack !== rightIsShotstack) {
-      return leftIsShotstack ? -1 : 1;
+    const tierDiff = videoProviderTier(left.provider) - videoProviderTier(right.provider);
+    if (tierDiff !== 0) {
+      return tierDiff;
     }
     return left.priority - right.priority;
   });
